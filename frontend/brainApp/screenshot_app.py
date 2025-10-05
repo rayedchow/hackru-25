@@ -18,6 +18,7 @@ class ScreenshotApp:
         self.running = True
         self.electron_process = None
         self.web_dir = os.path.join(os.path.dirname(__file__), 'web')
+        self.taking_screenshot = False  # Prevent multiple simultaneous screenshots
         
     def on_press(self, key):
         """Handle key press events"""
@@ -25,9 +26,12 @@ class ScreenshotApp:
         
         # Check for Command + J
         if (Key.cmd in self.current_keys and 
-            KeyCode.from_char('j') in self.current_keys):
+            KeyCode.from_char('j') in self.current_keys and
+            not self.taking_screenshot):
             print("Command+J detected! Opening macOS region selector...")
+            self.taking_screenshot = True
             self.take_region_screenshot()
+            self.taking_screenshot = False
     
     def on_release(self, key):
         """Handle key release events"""

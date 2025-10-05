@@ -16,13 +16,13 @@ export function Navbar() {
       className="sticky top-4 left-1/2 -translate-x-1/2 z-50 w-full max-w-4xl px-4 mx-auto"
     >
       <div className="glass-card rounded-2xl shadow-2xl border border-primary/20">
-        <div className="flex leading-7 px-[60px] flex-row justify-end w-auto h-16 items-center gap-1 mx-[-140px]">
+        <div className="flex flex-row justify-between w-full h-16 items-center px-6 gap-4">
           <Link
             href="/"
             className="flex items-center gap-2 font-mono text-xl font-bold text-foreground transition-all duration-300 hover:scale-105 tracking-tight group"
           >
             <Sparkles className="h-5 w-5 text-primary group-hover:text-accent transition-colors terminal-glow" />
-            <span className="code-accent">Brain App</span>
+            <span className="code-accent">Synapse</span>
           </Link>
 
           <div className="flex items-center gap-2">

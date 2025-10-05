@@ -1,0 +1,16 @@
+MATCH (c:Clip)
+OPTIONAL MATCH (c)-[:HAS_SUBJECT]->(s:Subject)
+OPTIONAL MATCH (c)-[:HAS_AESTHETIC]->(ae:Aesthetic)
+OPTIONAL MATCH (c)-[:ALIGNS_WITH_TREND]->(t:Trend)
+OPTIONAL MATCH (c)-[:FEATURES_CELEBRITY]->(cl:Celebrity)
+OPTIONAL MATCH (c)-[:REFERENCES_EVENT]->(e:CurrentEvent)
+OPTIONAL MATCH (c)-[:IS_CONTENT_TYPE]->(ct:ContentType)
+OPTIONAL MATCH (c)-[:IN_TIMEBIN]->(tb:TimeBin)
+RETURN c.id AS clip_id,
+       tb.yearweek AS timebin,
+       head(collect(DISTINCT s.name))  AS subject,
+       head(collect(DISTINCT ae.name)) AS aesthetic,
+       head(collect(DISTINCT t.name))  AS trend,
+       head(collect(DISTINCT cl.name)) AS celebrity,
+       head(collect(DISTINCT e.name))  AS current_event,
+       head(collect(DISTINCT ct.name)) AS content_type

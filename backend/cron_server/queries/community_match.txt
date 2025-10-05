@@ -1,0 +1,8 @@
+// community_match_subject_simple.cypher
+MATCH (s:Subject)<-[:HAS_SUBJECT]-(c:Clip)
+WITH s.name AS community_id,
+     collect(DISTINCT s.name) AS topics,        // keep field name "topics" for your writer
+     collect(DISTINCT c) AS clips
+WITH community_id, topics, clips, clips[0..10] AS reps
+RETURN community_id, topics, [x IN reps | x.id] AS sample_clips, size(clips) AS size
+ORDER BY size DESC;

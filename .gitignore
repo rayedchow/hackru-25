@@ -70,6 +70,8 @@ coverage/
 *.old
 
 # Project-specific
-captured_frames/*
-captured_audio/*
-session_logs/*
+captured_frames/
+captured_audio/
+session_logs/
+
+latest.png

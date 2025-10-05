@@ -1,0 +1,41 @@
+MERGE (c:Clip {id:$clip_id})
+SET c.saved_at = coalesce($saved_at, datetime())
+
+MERGE (tb:TimeBin {yearweek:$timebin})
+MERGE (c)-[:IN_TIMEBIN]->(tb)
+
+WITH c
+UNWIND $subjects AS s
+  MERGE (sj:Subject {name:s.name})
+  MERGE (c)-[rs:HAS_SUBJECT]->(sj)
+  SET rs.conf = s.conf
+
+WITH c
+UNWIND $aesthetics AS a
+  MERGE (ae:Aesthetic {name:a.name})
+  MERGE (c)-[ra:HAS_AESTHETIC]->(ae)
+  SET ra.conf = a.conf
+
+WITH c
+UNWIND $trends AS t
+  MERGE (tr:Trend {name:t.name})
+  MERGE (c)-[rt:ALIGNS_WITH_TREND]->(tr)
+  SET rt.conf = t.conf, rt.phase = coalesce(t.phase, 'stable')
+
+WITH c
+UNWIND $celebs AS ce
+  MERGE (cl:Celebrity {name:ce.name})
+  MERGE (c)-[rc:FEATURES_CELEBRITY]->(cl)
+  SET rc.conf = ce.conf
+
+WITH c
+UNWIND $events AS ev
+  MERGE (e:CurrentEvent {name:ev.name})
+  MERGE (c)-[re:REFERENCES_EVENT]->(e)
+  SET re.conf = ev.conf
+
+WITH c
+UNWIND $ctypes AS ct
+  MERGE (ctn:ContentType {name:ct.name})
+  MERGE (c)-[rct:IS_CONTENT_TYPE]->(ctn)
+  SET rct.conf = ct.conf

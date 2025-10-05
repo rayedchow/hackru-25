@@ -22,7 +22,7 @@ function createWindow() {
 
   // Load Next.js app
   const url = isDev
-    ? "http://localhost:3000"
+    ? "http://localhost:3000/chat"
     : `file://${path.join(__dirname, "../out/index.html")}`;
 
   mainWindow.loadURL(url);

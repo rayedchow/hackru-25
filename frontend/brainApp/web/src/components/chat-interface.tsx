@@ -104,7 +104,6 @@ export function ChatInterface() {
               repeat: isTyping ? Number.POSITIVE_INFINITY : 0,
             }}
           >
-            {isTyping ? "Listening..." : "Touch Desk"}
             {isTyping && (
               <motion.div
                 className="flex gap-1"
@@ -143,89 +142,6 @@ export function ChatInterface() {
             )}
           </motion.h1>
         </div>
-        <div className="text-xs text-muted-foreground font-mono">
-          Ready for Screenshots
-        </div>
-      </div>
-
-      <div className="flex-1 space-y-4 overflow-y-auto p-6">
-        <AnimatePresence>
-          {messages.map((message, index) => (
-            <motion.div
-              key={message.id}
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.3, delay: index * 0.05 }}
-              className={`flex ${
-                message.sender === "user" ? "justify-end" : "justify-start"
-              }`}
-              onMouseEnter={() => setHoveredMessage(message.id)}
-              onMouseLeave={() => setHoveredMessage(null)}
-            >
-              <div className="flex flex-col gap-1 max-w-[80%]">
-                <div
-                  className={`flex items-center gap-1.5 px-2 ${
-                    message.sender === "user" ? "justify-end" : "justify-start"
-                  }`}
-                >
-                  {message.sender === "bot" && (
-                    <Sparkles className="h-3 w-3 text-primary" />
-                  )}
-                  <span className="text-xs text-muted-foreground font-mono">
-                    {message.sender === "bot" ? "AI Assistant" : "You"}
-                  </span>
-                  <span className="text-xs text-muted-foreground/50">
-                    {message.timestamp}
-                  </span>
-                </div>
-
-                <motion.div
-                  whileHover={{ scale: 1.02 }}
-                  className={`relative rounded-2xl px-5 py-3 backdrop-blur-sm ${
-                    message.sender === "user"
-                      ? "bg-primary/90 text-primary-foreground border border-primary/30 shadow-lg shadow-primary/20"
-                      : "bg-gradient-to-br from-card/90 to-card/70 text-card-foreground border border-border/40 shadow-xl"
-                  }`}
-                  style={
-                    message.sender === "user"
-                      ? {
-                          boxShadow:
-                            "0 0 20px rgba(59, 130, 246, 0.3), 0 4px 12px rgba(0, 0, 0, 0.2)",
-                        }
-                      : {}
-                  }
-                >
-                  <p className="text-sm leading-relaxed">{message.text}</p>
-
-                  <AnimatePresence>
-                    {hoveredMessage === message.id && (
-                      <motion.div
-                        initial={{ opacity: 0, scale: 0.9 }}
-                        animate={{ opacity: 1, scale: 1 }}
-                        exit={{ opacity: 0, scale: 0.9 }}
-                        className="absolute -top-8 right-0 flex gap-1 bg-background/95 backdrop-blur-md border border-border/50 rounded-lg p-1 shadow-lg"
-                      >
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          className="h-6 w-6"
-                          onClick={() =>
-                            navigator.clipboard.writeText(message.text)
-                          }
-                        >
-                          <Copy className="h-3 w-3" />
-                        </Button>
-                        <Button size="icon" variant="ghost" className="h-6 w-6">
-                          <Bookmark className="h-3 w-3" />
-                        </Button>
-                      </motion.div>
-                    )}
-                  </AnimatePresence>
-                </motion.div>
-              </div>
-            </motion.div>
-          ))}
-        </AnimatePresence>
       </div>
 
       <div className="border-t border-border/30 bg-background/20 px-4 py-2 backdrop-blur-sm">

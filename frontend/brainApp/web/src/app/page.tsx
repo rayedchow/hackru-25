@@ -15,8 +15,8 @@ export default function LandingPage() {
       <div className="relative z-10 flex flex-col h-full">
         <Navbar />
 
-        <div className="flex flex-1 items-center justify-center p-6 overflow-hidden">
-          <div className="max-w-5xl w-full text-center flex flex-col items-center justify-center gap-4">
+        <div className="flex flex-1 items-center justify-center p-6 pt-0 overflow-hidden">
+          <div className="max-w-5xl w-full text-center flex flex-col items-center justify-center gap-8">
             {/* Hero Section */}
             <div className="space-y-2">
               <h1 className="text-5xl font-bold font-mono text-foreground terminal-glow">

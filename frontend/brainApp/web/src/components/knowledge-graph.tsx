@@ -352,7 +352,7 @@ export function KnowledgeGraph({ nodes, edges }: KnowledgeGraphProps) {
           </button>
         </div>
 
-        <div className="relative h-[400px] rounded-xl overflow-hidden bg-background/20">
+        <div className="relative h-[450px] rounded-xl overflow-hidden bg-background/20">
           <canvas
             ref={canvasRef}
             className="h-full w-full cursor-grab"
@@ -402,9 +402,6 @@ export function KnowledgeGraph({ nodes, edges }: KnowledgeGraphProps) {
               Start Capturing
               <ArrowRight className="h-5 w-5" />
             </Link>
-            <p className="text-xs text-muted-foreground font-mono bg-black/40 px-3 py-1 rounded-lg backdrop-blur-md">
-              Press Command + J to capture
-            </p>
           </div>
         </div>
       </div>

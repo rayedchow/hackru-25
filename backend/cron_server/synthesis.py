@@ -1,5 +1,6 @@
 from datasetup import embed_text, gemini_model, pg
 import json, sys
+from projector import pca_3d
 
 
 def _vec_literal(vec):
@@ -65,39 +66,98 @@ def search_communities_pg(query_text, topk=6):
         return out
 
 
-def ask(query: str):
-    comms = search_communities_pg(query, topk=4)  # sense-making layer
-    cards = search_cards_pg(query, topk=4)  # concrete examples
+def ask(query: str, project_to_3d: bool = True):
+    # Retrieve
+    comms = search_communities_pg(
+        query, topk=4
+    )  # should include 'embedding' if you added earlier patch
+    cards = search_cards_pg(query, topk=4)
+
+    # Ensure embeddings are present; if not, fetch them just like you did before
+    missing_comm_emb = any(
+        "embedding" not in c or c["embedding"] is None for c in comms
+    )
+    missing_card_emb = any(
+        "embedding" not in c or c["embedding"] is None for c in cards
+    )
+
+    if missing_comm_emb or missing_card_emb:
+        from datasetup import pg
+
+        with pg.cursor() as cur:
+            if comms and missing_comm_emb:
+                ids = tuple([c["community_id"] for c in comms])
+                cur.execute(
+                    "SELECT community_id, emb FROM community_reports WHERE community_id IN %s",
+                    (ids,),
+                )
+                emb_map = {r[0]: r[1] for r in cur.fetchall()}
+                for c in comms:
+                    c.setdefault("embedding", emb_map.get(c["community_id"]))
+            if cards and missing_card_emb:
+                ids = tuple([c["clip_id"] for c in cards])
+                cur.execute(
+                    "SELECT clip_id, emb FROM image_cards WHERE clip_id IN %s", (ids,)
+                )
+                emb_map = {r[0]: r[1] for r in cur.fetchall()}
+                for c in cards:
+                    c.setdefault("embedding", emb_map.get(c["clip_id"]))
+
+    # 3D projection (fit on the combined set so both lie in the same space)
+    if project_to_3d:
+        all_vecs = []
+        idx_comm, idx_card = [], []
+        for i, c in enumerate(comms):
+            if c.get("embedding") is not None:
+                idx_comm.append(len(all_vecs))
+                all_vecs.append(c["embedding"])
+        for i, c in enumerate(cards):
+            if c.get("embedding") is not None:
+                idx_card.append(len(all_vecs))
+                all_vecs.append(c["embedding"])
+
+        if all_vecs:
+            Z = pca_3d(all_vecs)  # or umap_3d(all_vecs)
+            for k, i_global in enumerate(idx_comm):
+                comms[k]["coords3d"] = Z[i_global].tolist()
+            for k, i_global in enumerate(idx_card):
+                cards[k]["coords3d"] = Z[i_global].tolist()
+
+    # Build the teaching prompt
     prompt = f"""
       You are a teacher and a storyteller who understands the user's learning style through their media consumption.
       Your task is to teach the user the concept in the query in a way that is deeply engaging and emotionally resonant.
 
-      The user has consumed the following media communities and content cards:
-      Global community summaries (contextual themes of what they watch):
+      Global community summaries:
       {json.dumps(comms, indent=2)}
 
-      Representative image cards (specific examples of content they engage with):
+      Representative image cards:
       {json.dumps(cards, indent=2)}
 
-      Now, explain the concept in the query below **as if you are speaking directly to this user**, 
-      weaving their media patterns into your teaching as natural, flowing analogies — not separate sections. 
-      Each analogy should feel like a story that makes the educational concept *click* through the lens of what they watch.
+      Now, explain the concept in the query below as if you are speaking directly to this user,
+      weaving their media patterns into your teaching as natural, flowing analogies — not separate sections.
 
-      **Guidelines:**
-      - Write in a narrative, human tone — think like a wise, reflective teacher who uses pop culture to teach deeply.
-      - Integrate at least two analogies from the media patterns above in a cohesive way, rather than listing them.
-      - Do NOT say things like "reels" or "feed", just SMOOTHLY CONNECT THE CONCEPT TO THE USER'S MEDIA CONSUMPTION. DO IT IN A WAY THAT IS NATURAL AND NOT FORCEFUL.
-      - Use vivid examples and emotional connection, not bullet points.
-      - Make it sound inspiring and intuitive, as if this concept were already embedded in their daily life.
-      - MAKE YOUR RESPONSE TO THE POINT.
-      - Output 3 short sections with markdown headings:
+      Guidelines:
+      - Use a narrative tone and vivid analogies.
+      - Integrate at least two analogies from the above media patterns.
+      - Avoid mentioning "reels" or "feed".
+      - Output three concise sections with markdown headings:
         1. A Hook or Analogy
         2. The Core Explanation
-        3. The Connection — showing how the concept lives inside their media consumption.
+        3. The Connection
 
-      **Query:**
-      {query}"""
-    return gemini_model.generate_content(prompt).text.strip()
+      Query:
+      {query}
+    """.strip()
+
+    answer = (gemini_model.generate_content(prompt).text or "").strip()
+
+    return {
+        "answer": answer,
+        "communities": comms,  # each may now have coords3d
+        "cards": cards,  # each may now have coords3d
+        "projection": "pca_3d",
+    }
 
 
 if __name__ == "__main__":

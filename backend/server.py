@@ -309,7 +309,7 @@ async def ask_screenshot(req: Request):
         ]
     )
     answer = ask(question)
-    return {"status": "received", "answer": answer}
+    return {"status": "received", "result": answer}
 
 
 @app.post("/ask_question")
@@ -317,7 +317,7 @@ async def ask_question(req: Request):
     data = await req.json()
     question = data.get("question")
     answer = ask(question)
-    return {"status": "received", "answer": answer}
+    return {"status": "received", "result": answer}
 
 
 if __name__ == "__main__":

@@ -1,0 +1,57 @@
+WITH $clip_id AS cid
+MATCH (c:Clip {id: cid})
+
+OPTIONAL MATCH (c)-[:HAS_SUBJECT]->(s:Subject)
+OPTIONAL MATCH (c)-[:HAS_AESTHETIC]->(a:Aesthetic)
+OPTIONAL MATCH (c)-[:ALIGNS_WITH_TREND]->(t:Trend)
+OPTIONAL MATCH (c)-[:IS_CONTENT_TYPE]->(ct:ContentType)
+OPTIONAL MATCH (c)-[:FEATURES_CELEBRITY]->(cl:Celebrity)
+OPTIONAL MATCH (c)-[:REFERENCES_EVENT]->(e:CurrentEvent)
+
+WITH
+  collect(DISTINCT s)  AS subjects,
+  collect(DISTINCT a)  AS aesthetics,
+  collect(DISTINCT t)  AS trends,
+  collect(DISTINCT ct) AS ctypes,
+  collect(DISTINCT cl) AS celebs,
+  collect(DISTINCT e)  AS events
+
+// SUBJECT -> AESTHETIC
+FOREACH (s IN subjects |
+  FOREACH (a IN aesthetics |
+    MERGE (s)-[r:PRESENTED_AS]->(a)
+    SET r.w = coalesce(r.w,0) + 1, r.updated_at = timestamp()
+  )
+)
+
+// SUBJECT -> TREND
+FOREACH (s IN subjects |
+  FOREACH (t IN trends |
+    MERGE (s)-[r:SUBJECT_ALIGNS_WITH_TREND]->(t)
+    SET r.w = coalesce(r.w,0) + 1, r.updated_at = timestamp()
+  )
+)
+
+// TREND -> CONTENTTYPE
+FOREACH (t IN trends |
+  FOREACH (ctype IN ctypes |
+    MERGE (t)-[r:TYPICALLY_FORMATTED_AS]->(ctype)
+    SET r.w = coalesce(r.w,0) + 1, r.updated_at = timestamp()
+  )
+)
+
+// CELEBRITY -> SUBJECT
+FOREACH (cl IN celebs |
+  FOREACH (s IN subjects |
+    MERGE (cl)-[r:ASSOCIATED_WITH]->(s)
+    SET r.w = coalesce(r.w,0) + 1, r.updated_at = timestamp()
+  )
+)
+
+// CURRENT_EVENT -> TREND
+FOREACH (ev IN events |
+  FOREACH (t IN trends |
+    MERGE (ev)-[r:SPARKS]->(t)
+    SET r.w = coalesce(r.w,0) + 1, r.updated_at = timestamp()
+  )
+)

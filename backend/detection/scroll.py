@@ -53,7 +53,9 @@ def detect_scroll(
     distance = hamming_distance(previous_hash, current_hash)
 
     # Scroll detected if change is significant but not extreme
-    # Range tuned to avoid false positives from video motion
-    did_scroll = 15 <= distance <= 35
+    # Higher threshold to avoid false positives from video motion
+    # Actual scrolling causes major layout changes (25-40 bit difference)
+    # Video motion typically causes smaller changes (< 25 bits)
+    did_scroll = 20 <= distance <= 40
 
     return (did_scroll, current_hash)

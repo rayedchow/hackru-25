@@ -1,8 +1,9 @@
 "use client";
 
 import Link from "next/link";
+import Image from "next/image";
 import { usePathname } from "next/navigation";
-import { MessageSquare, LayoutDashboard, Sparkles } from "lucide-react";
+import { MessageSquare, LayoutDashboard } from "lucide-react";
 import { motion } from "framer-motion";
 
 export function Navbar() {
@@ -19,16 +20,22 @@ export function Navbar() {
         <div className="flex flex-row items-center w-full h-16 px-6 gap-4">
           <Link
             href="/"
-            className="flex items-center gap-2 font-mono text-xl font-bold text-foreground transition-all duration-300 hover:scale-105 tracking-tight group"
+            className="flex items-center transition-all duration-300 hover:scale-105 group"
           >
-            <Sparkles className="h-5 w-5 text-primary group-hover:text-accent transition-colors terminal-glow" />
-            <span className="code-accent">Synapse</span>
+            <Image
+              src="/logo.png"
+              alt="Synapse Logo"
+              width={200}
+              height={70}
+              className="h-14 w-auto object-contain"
+              priority
+            />
           </Link>
 
-          <div className="flex-1 flex items-center justify-center gap-2">
+          <div className="flex-1 flex items-center justify-center gap-3">
             <Link
               href="/chat"
-              className={`flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-medium font-mono transition-all duration-300 ${
+              className={`flex items-center gap-2.5 rounded-xl px-6 py-3 text-base font-medium font-mono transition-all duration-300 ${
                 pathname === "/chat"
                   ? "bg-primary/20 text-primary shadow-lg glow-primary scale-105"
                   : "text-muted-foreground hover:bg-muted hover:text-foreground hover:scale-105"
@@ -40,7 +47,7 @@ export function Navbar() {
                     : "none",
               }}
             >
-              <MessageSquare className="h-4 w-4" />
+              <MessageSquare className="h-5 w-5" />
               <span className="drop-shadow-[0_0_8px_rgba(147,197,253,0.4)]">
                 Chat
               </span>
@@ -48,7 +55,7 @@ export function Navbar() {
 
             <Link
               href="/dashboard"
-              className={`flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-medium font-mono transition-all duration-300 ${
+              className={`flex items-center gap-2.5 rounded-xl px-6 py-3 text-base font-medium font-mono transition-all duration-300 ${
                 pathname === "/dashboard"
                   ? "bg-primary/20 text-primary shadow-lg glow-primary scale-105"
                   : "text-muted-foreground hover:bg-muted hover:text-foreground hover:scale-105"
@@ -60,7 +67,7 @@ export function Navbar() {
                     : "none",
               }}
             >
-              <LayoutDashboard className="h-4 w-4" />
+              <LayoutDashboard className="h-5 w-5" />
               <span className="drop-shadow-[0_0_8px_rgba(147,197,253,0.4)]">
                 Dashboard
               </span>

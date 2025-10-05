@@ -6,6 +6,7 @@ import { Image as ImageIcon, Maximize2, Download } from "lucide-react";
 
 export function ScreenshotViewer() {
   const [imageUrl, setImageUrl] = useState<string | null>(null);
+  const [imageKey, setImageKey] = useState<string>("");
   const [lastUpdate, setLastUpdate] = useState<number>(Date.now());
 
   useEffect(() => {
@@ -22,17 +23,26 @@ export function ScreenshotViewer() {
     fetch(`/api/screenshot?t=${lastUpdate}`)
       .then((res) => res.json())
       .then((data) => {
-        if (data.url && data.url !== imageUrl) {
-          setImageUrl(data.url);
+        if (data.url) {
+          // Extract base URL without timestamp for stable key
+          const baseUrl = data.url.split("?")[0];
 
-          // Notify Electron to show window if running in Electron
-          if (typeof window !== "undefined" && (window as any).electron) {
-            (window as any).electron.notifyScreenshot();
+          // Only trigger animation if the base image changed
+          if (baseUrl !== imageKey) {
+            setImageKey(baseUrl);
+
+            // Notify Electron to show window if running in Electron
+            if (typeof window !== "undefined" && (window as any).electron) {
+              (window as any).electron.notifyScreenshot();
+            }
           }
+
+          // Always update the URL to bust cache
+          setImageUrl(data.url);
         }
       })
       .catch(() => {});
-  }, [lastUpdate, imageUrl]);
+  }, [lastUpdate, imageKey]);
 
   return (
     <div className="flex h-full w-full flex-col bg-card">
@@ -53,7 +63,7 @@ export function ScreenshotViewer() {
         <AnimatePresence mode="wait">
           {imageUrl ? (
             <motion.div
-              key={imageUrl}
+              key={imageKey}
               initial={{ opacity: 0, scale: 0.9 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.9 }}

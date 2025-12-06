@@ -302,12 +302,16 @@ async def ask_screenshot(req: Request):
     data = await req.json()
     image = data.get("screenshot")
     pil_image = Image.open(BytesIO(base64.b64decode(image)))
-    question = gemini_model.generate_content(
-        [
-            "You are an image translator. Output what the image is asking as a question. I will interpret the question and create a response. JUST OUTPUT THE QUESTION IN A QUESTION FORMAT AND GET THE MOST DETAIL OUT OF THE IMAGE INTO THE QUESTION AS POSSIBLE.",
-            pil_image,
-        ]
-    )
+    question = (
+        gemini_model.generate_content(
+            [
+                "You are an image translator. Output what the image is asking as a question. I will interpret the question and create a response. JUST OUTPUT THE QUESTION IN A QUESTION FORMAT AND GET THE MOST DETAIL OUT OF THE IMAGE INTO THE QUESTION AS POSSIBLE.",
+                pil_image,
+            ]
+        ).text
+        or ""
+    ).strip()
+    print(f"[ask_screenshot] Extracted question: {question}")
     answer = ask(question)
     return {"status": "received", "result": answer}
 

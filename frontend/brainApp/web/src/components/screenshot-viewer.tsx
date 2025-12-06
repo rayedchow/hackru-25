@@ -1,26 +1,23 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Image as ImageIcon, Maximize2, Download } from "lucide-react";
 
 export function ScreenshotViewer() {
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [imageKey, setImageKey] = useState<string>("");
-  const [lastUpdate, setLastUpdate] = useState<number>(Date.now());
+  const wsRef = useRef<WebSocket | null>(null);
+  const imageKeyRef = useRef<string>("");
 
+  // Update ref when imageKey changes
   useEffect(() => {
-    // Poll for new screenshot every second
-    const interval = setInterval(() => {
-      setLastUpdate(Date.now());
-    }, 1000);
+    imageKeyRef.current = imageKey;
+  }, [imageKey]);
 
-    return () => clearInterval(interval);
-  }, []);
-
-  useEffect(() => {
-    // Check if screenshot exists
-    fetch(`/api/screenshot?t=${lastUpdate}`)
+  // Fetch screenshot when notified
+  const fetchScreenshot = () => {
+    fetch(`/api/screenshot?t=${Date.now()}`)
       .then((res) => res.json())
       .then((data) => {
         if (data.url) {
@@ -28,7 +25,7 @@ export function ScreenshotViewer() {
           const baseUrl = data.url.split("?")[0];
 
           // Only trigger animation if the base image changed
-          if (baseUrl !== imageKey) {
+          if (baseUrl !== imageKeyRef.current) {
             setImageKey(baseUrl);
 
             // Notify Electron to show window if running in Electron
@@ -42,17 +39,51 @@ export function ScreenshotViewer() {
         }
       })
       .catch(() => {});
-  }, [lastUpdate, imageKey]);
+  };
+
+  useEffect(() => {
+    // Initial fetch
+    fetchScreenshot();
+
+    // Connect to WebSocket server
+    const ws = new WebSocket("ws://localhost:3000/ws/screenshot");
+    wsRef.current = ws;
+
+    ws.onopen = () => {
+      console.log("WebSocket connected to screenshot updates");
+    };
+
+    ws.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        if (data.type === "screenshot_update") {
+          console.log("Screenshot update received via WebSocket");
+          fetchScreenshot();
+        }
+      } catch (error) {
+        console.error("Error parsing WebSocket message:", error);
+      }
+    };
+
+    ws.onerror = (error) => {
+      console.error("WebSocket error:", error);
+    };
+
+    ws.onclose = () => {
+      console.log("WebSocket disconnected");
+    };
+
+    return () => {
+      if (wsRef.current) {
+        wsRef.current.close();
+      }
+    };
+  }, []);
 
   return (
     <div className="flex h-full w-full flex-col bg-card">
       {/* Header */}
       <div className="flex items-center gap-3 border-b border-border px-6 py-4">
-        <div className="flex gap-1.5">
-          <div className="h-3 w-3 rounded-full bg-red-500/80" />
-          <div className="h-3 w-3 rounded-full bg-yellow-500/80" />
-          <div className="h-3 w-3 rounded-full bg-green-500/80" />
-        </div>
         <h2 className="font-mono text-sm text-muted-foreground">
           Screenshot View
         </h2>

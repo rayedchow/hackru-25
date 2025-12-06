@@ -152,3 +152,88 @@
   color: oklch(0.75 0.18 250);
   text-shadow: 0 0 8px oklch(0.75 0.18 250 / 0.5);
 }
+
+/* Custom scrollbar for answer section */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 8px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: rgba(15, 23, 42, 0.3);
+  border-radius: 4px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, #60A5FA, #A78BFA);
+  border-radius: 4px;
+  transition: background 0.3s ease;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, #3B82F6, #8B5CF6);
+}
+
+/* Firefox scrollbar */
+.custom-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: #60A5FA rgba(15, 23, 42, 0.3);
+}
+
+/* Markdown prose styling for answers */
+.prose-invert {
+  color: rgba(255, 255, 255, 0.95);
+}
+
+.prose-invert h1,
+.prose-invert h2,
+.prose-invert h3 {
+  color: rgb(255, 255, 255);
+  font-weight: 800;
+  margin-top: 2em;
+  margin-bottom: 1em;
+  letter-spacing: -0.025em;
+}
+
+.prose-invert h1 {
+  font-size: 1.875em;
+}
+
+.prose-invert h2 {
+  font-size: 1.5em;
+}
+
+.prose-invert h3 {
+  font-size: 1.25em;
+}
+
+.prose-invert p {
+  margin-top: 1.5em;
+  margin-bottom: 1.5em;
+  line-height: 2;
+}
+
+.prose-invert strong {
+  color: rgb(255, 255, 255);
+  font-weight: 700;
+}
+
+.prose-invert code {
+  background: rgba(96, 165, 250, 0.15);
+  padding: 0.2em 0.4em;
+  border-radius: 0.25em;
+  color: rgb(96, 165, 250);
+  font-size: 0.9em;
+}
+
+.prose-invert ul,
+.prose-invert ol {
+  margin-top: 1.5em;
+  margin-bottom: 1.5em;
+  padding-left: 1.5em;
+}
+
+.prose-invert li {
+  margin-top: 0.75em;
+  margin-bottom: 0.75em;
+  line-height: 1.9;
+}

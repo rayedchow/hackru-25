@@ -40,12 +40,13 @@ function createWindow() {
 
 async function startNextServer() {
   return new Promise((resolve, reject) => {
-    console.log("Starting Next.js dev server...");
+    console.log("Starting Next.js dev server with WebSocket support...");
 
-    nextServer = spawn("npm", ["run", "dev"], {
+    nextServer = spawn("node", ["server.js"], {
       cwd: path.join(__dirname, ".."),
       shell: true,
       stdio: "inherit",
+      env: { ...process.env, NODE_ENV: "development" },
     });
 
     nextServer.on("error", (err) => {
@@ -60,7 +61,7 @@ async function startNextServer() {
       interval: 1000,
     })
       .then(() => {
-        console.log("Next.js server is ready!");
+        console.log("Next.js server with WebSocket is ready!");
         resolve();
       })
       .catch((err) => {
@@ -117,6 +118,8 @@ app.on("window-all-closed", () => {
 // API to show window (called from Python via HTTP)
 const express = require("express");
 const expressApp = express();
+
+expressApp.use(express.json());
 
 expressApp.post("/electron/show", (req, res) => {
   console.log("Received request to show window");

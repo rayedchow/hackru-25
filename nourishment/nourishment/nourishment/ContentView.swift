@@ -5,8 +5,8 @@ import UIKit
 struct ContentView: View {
     var body: some View {
         VStack(spacing: 20) {
-            Image(systemName: "globe").imageScale(.large).foregroundStyle(.tint)
-            Text("Hello, world!")
+            Image(systemName: "brain").imageScale(.large).foregroundStyle(.tint)
+            Text("Synapse")
 
             BroadcastLauncher(preferredExtension: "com.rayedchow.nourishment.nourishmentBroadcast")
                 .frame(width: 220, height: 44)
@@ -30,7 +30,7 @@ struct BroadcastLauncher: UIViewRepresentable {
 
         // Visible button you control
         let btn = UIButton(type: .system)
-        btn.setTitle("Start Broadcast", for: .normal)
+        btn.setTitle("Start Streaming Reels", for: .normal)
         btn.addTarget(context.coordinator, action: #selector(Coordinator.tapPicker), for: .touchUpInside)
         btn.translatesAutoresizingMaskIntoConstraints = false
         container.addSubview(btn)

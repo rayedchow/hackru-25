@@ -1,6 +1,17 @@
-from datasetup import embed_text, gemini_model, pg
+from cron_server.datasetup import embed_text, gemini_model, pg
 import json, sys
-from projector import pca_3d
+from cron_server.projector import pca_3d
+
+
+def _parse_pg_vector(vec_str):
+    """Parse PostgreSQL vector string format '[1.0,2.0,...]' to list of floats."""
+    if isinstance(vec_str, str):
+        # Remove brackets and split by comma
+        vec_str = vec_str.strip()
+        if vec_str.startswith("[") and vec_str.endswith("]"):
+            vec_str = vec_str[1:-1]
+        return [float(x) for x in vec_str.split(",")]
+    return vec_str  # already a list/array
 
 
 def _vec_literal(vec):
@@ -15,7 +26,8 @@ def search_cards_pg(query_text, topk=10):
             """
             -- cosine distance via function (works across pgvector versions)
             SELECT clip_id, brief_caption, subject, aesthetic, trend, celebrity, content_type,
-                   1 - cosine_distance(emb, %s::vector(768)) AS score
+                   1 - cosine_distance(emb, %s::vector(768)) AS score,
+                   emb
             FROM image_cards
             WHERE emb IS NOT NULL
             ORDER BY cosine_distance(emb, %s::vector(768))
@@ -26,7 +38,15 @@ def search_cards_pg(query_text, topk=10):
         rows = cur.fetchall()
         if not rows:
             print("[cards] vector search returned 0 rows", file=sys.stderr)
-        return [dict(zip([d.name for d in cur.description], row)) for row in rows]
+        results = []
+        for row in rows:
+            item = dict(zip([d.name for d in cur.description], row))
+            # Parse the embedding from PostgreSQL vector format
+            if "emb" in item and item["emb"] is not None:
+                item["embedding"] = _parse_pg_vector(item["emb"])
+                del item["emb"]  # Remove the raw emb field
+            results.append(item)
+        return results
 
 
 def search_communities_pg(query_text, topk=6):
@@ -45,7 +65,8 @@ def search_communities_pg(query_text, topk=6):
         cur.execute(
             """
             SELECT community_id, summary, top_k,
-                   1 - cosine_distance(emb, %s::vector(768)) AS score
+                   1 - cosine_distance(emb, %s::vector(768)) AS score,
+                   emb
             FROM community_reports
             WHERE emb IS NOT NULL
             ORDER BY cosine_distance(emb, %s::vector(768))
@@ -60,6 +81,10 @@ def search_communities_pg(query_text, topk=6):
             item = dict(zip(cols, r))
             if isinstance(item["top_k"], str):
                 item["top_k"] = json.loads(item["top_k"])
+            # Parse the embedding from PostgreSQL vector format
+            if "emb" in item and item["emb"] is not None:
+                item["embedding"] = _parse_pg_vector(item["emb"])
+                del item["emb"]  # Remove the raw emb field
             out.append(item)
         if not out:
             print("[comms] vector search returned 0 rows", file=sys.stderr)
@@ -82,24 +107,23 @@ def ask(query: str, project_to_3d: bool = True):
     )
 
     if missing_comm_emb or missing_card_emb:
-        from datasetup import pg
-
         with pg.cursor() as cur:
             if comms and missing_comm_emb:
-                ids = tuple([c["community_id"] for c in comms])
+                ids = [c["community_id"] for c in comms]
                 cur.execute(
-                    "SELECT community_id, emb FROM community_reports WHERE community_id IN %s",
+                    "SELECT community_id, emb FROM community_reports WHERE community_id = ANY(%s)",
                     (ids,),
                 )
-                emb_map = {r[0]: r[1] for r in cur.fetchall()}
+                emb_map = {r[0]: _parse_pg_vector(r[1]) for r in cur.fetchall()}
                 for c in comms:
                     c.setdefault("embedding", emb_map.get(c["community_id"]))
             if cards and missing_card_emb:
-                ids = tuple([c["clip_id"] for c in cards])
+                ids = [c["clip_id"] for c in cards]
                 cur.execute(
-                    "SELECT clip_id, emb FROM image_cards WHERE clip_id IN %s", (ids,)
+                    "SELECT clip_id, emb FROM image_cards WHERE clip_id = ANY(%s)",
+                    (ids,),
                 )
-                emb_map = {r[0]: r[1] for r in cur.fetchall()}
+                emb_map = {r[0]: _parse_pg_vector(r[1]) for r in cur.fetchall()}
                 for c in cards:
                     c.setdefault("embedding", emb_map.get(c["clip_id"]))
 
@@ -123,16 +147,27 @@ def ask(query: str, project_to_3d: bool = True):
             for k, i_global in enumerate(idx_card):
                 cards[k]["coords3d"] = Z[i_global].tolist()
 
+    # Create clean copies for prompt (no embeddings or coords3d)
+    comms_for_prompt = []
+    for c in comms:
+        c_clean = {k: v for k, v in c.items() if k not in ["embedding", "coords3d"]}
+        comms_for_prompt.append(c_clean)
+
+    cards_for_prompt = []
+    for c in cards:
+        c_clean = {k: v for k, v in c.items() if k not in ["embedding", "coords3d"]}
+        cards_for_prompt.append(c_clean)
+
     # Build the teaching prompt
     prompt = f"""
       You are a teacher and a storyteller who understands the user's learning style through their media consumption.
       Your task is to teach the user the concept in the query in a way that is deeply engaging and emotionally resonant.
 
       Global community summaries:
-      {json.dumps(comms, indent=2)}
+      {json.dumps(comms_for_prompt, indent=2)}
 
       Representative image cards:
-      {json.dumps(cards, indent=2)}
+      {json.dumps(cards_for_prompt, indent=2)}
 
       Now, explain the concept in the query below as if you are speaking directly to this user,
       weaving their media patterns into your teaching as natural, flowing analogies — not separate sections.
@@ -140,17 +175,20 @@ def ask(query: str, project_to_3d: bool = True):
       Guidelines:
       - Use a narrative tone and vivid analogies.
       - Integrate at least two analogies from the above media patterns.
-      - Avoid mentioning "reels" or "feed".
-      - Output three concise sections with markdown headings:
-        1. A Hook or Analogy
-        2. The Core Explanation
-        3. The Connection
+      - Avoid mentioning "reels" or "feed" or "analogy".
+      - Keep it extremely smooth and concisely answer the query by seamlessly connecting to the relationship-wise relevant media above.
 
       Query:
       {query}
     """.strip()
 
     answer = (gemini_model.generate_content(prompt).text or "").strip()
+
+    # Remove embeddings from response (only keep coords3d for visualization)
+    for c in comms:
+        c.pop("embedding", None)
+    for c in cards:
+        c.pop("embedding", None)
 
     return {
         "answer": answer,

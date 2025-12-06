@@ -7,7 +7,7 @@ HTML = """<!DOCTYPE html>
 <html>
 <head>
   <meta charset="utf-8">
-  <title>BrainRot Monitor</title>
+  <title>Synapse Monitor</title>
   <style>
     body {
       background: #0e0e0f;
@@ -69,7 +69,7 @@ HTML = """<!DOCTYPE html>
   </style>
 </head>
 <body>
-  <h2>🧠 BrainRot Monitor</h2>
+  <h2>🧠 Synapse Monitor</h2>
   <div class="container">
     <img id="preview" class="card" alt="Waiting for frames..."/>
     <div class="card info">

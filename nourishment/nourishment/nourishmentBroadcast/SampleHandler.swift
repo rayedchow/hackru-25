@@ -6,8 +6,8 @@ import UIKit
 final class SampleHandler: RPBroadcastSampleHandler {
 
     // MARK: Config
-    private let uploadURL = URL(string: "https://1cb2acdadd2e.ngrok-free.app/upload")!
-    private let chunkSeconds: Double = 5.0
+    private let uploadURL = URL(string: "https://d73559d3afca.ngrok-free.app/upload")!
+    private let chunkSeconds: Double = 2.0
 
     // MARK: State
     private var ciContext = CIContext(options: nil)

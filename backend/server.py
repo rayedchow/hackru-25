@@ -130,7 +130,7 @@ def create_app(
         if allowed_hosts is not None
         else tuple(
             value.strip()
-            for value in os.getenv("SYNAPSE_ALLOWED_HOSTS", "127.0.0.1,localhost,[::1]").split(",")
+            for value in os.getenv("SYNAPSE_ALLOWED_HOSTS", "127.0.0.1,localhost").split(",")
             if value.strip()
         )
     )

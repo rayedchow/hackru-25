@@ -12,7 +12,10 @@ test("Next capture adapter defaults to loopback and never caches raw images", ()
   assert.match(source, /base\.protocol !== "https:"/);
   assert.match(source, /AbortSignal\.timeout\(10_000\)/);
   assert.match(source, /trustedBrowserRequest/);
+  assert.match(source, /const BACKEND_LOCAL_HOSTS = new Set/);
+  assert.match(source, /BACKEND_LOCAL_HOSTS\.has\(base\.hostname\)/);
   assert.match(source, /LOCAL_ORIGINS/);
+  assert.doesNotMatch(source, /(?<!BACKEND_)LOCAL_HOSTS/);
   assert.doesNotMatch(source, /writeFile|latest\.png|public\/latest/);
 });
 

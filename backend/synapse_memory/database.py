@@ -773,6 +773,26 @@ class MemoryDatabase:
                 SELECT content_id FROM memory_items
                 WHERE owner_id = ? AND expires_at IS NOT NULL AND expires_at <= ?
                   AND state != ?
+                  AND NOT (
+                    state = ?
+                    AND EXISTS (
+                      SELECT 1 FROM deletion_status exhausted
+                      WHERE exhausted.content_id = memory_items.content_id
+                        AND exhausted.state = ?
+                        AND exhausted.last_error_code = 'deletion_attempts_exhausted'
+                    )
+                    AND NOT EXISTS (
+                      SELECT 1 FROM deletion_status actionable
+                      WHERE actionable.content_id = memory_items.content_id
+                        AND (
+                          actionable.state IN (?, ?)
+                          OR (
+                            actionable.state = ?
+                            AND actionable.last_error_code != 'deletion_attempts_exhausted'
+                          )
+                        )
+                    )
+                  )
                 ORDER BY expires_at, content_id
                 LIMIT ?
                 """,
@@ -780,6 +800,11 @@ class MemoryDatabase:
                     owner_id,
                     _iso(now),
                     ProcessingState.DELETED.value,
+                    ProcessingState.DELETING.value,
+                    DeletionState.FAILED.value,
+                    DeletionState.PENDING.value,
+                    DeletionState.PROCESSING.value,
+                    DeletionState.FAILED.value,
                     limit,
                 ),
             ).fetchall()

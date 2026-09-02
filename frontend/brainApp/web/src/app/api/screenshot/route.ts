@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
 const MAX_UPLOAD_BYTES = 8 * 1024 * 1024;
+const BACKEND_LOCAL_HOSTS = new Set(["127.0.0.1", "localhost"]);
 const LOCAL_ORIGINS = new Set(["http://127.0.0.1:3000", "http://localhost:3000"]);
 const LOCAL_HOST_PATTERN = /^(?:(?:127\.0\.0\.1|localhost)(?::\d{1,5})?|\[::1\](?::\d{1,5})?)$/;
 
@@ -13,7 +14,7 @@ function trustedBrowserRequest(request: NextRequest): boolean {
 function backendUploadUrl(): URL {
   const configured = process.env.SYNAPSE_BACKEND_URL ?? "http://127.0.0.1:8000";
   const base = new URL(configured);
-  const isLocal = LOCAL_HOSTS.has(base.hostname);
+  const isLocal = BACKEND_LOCAL_HOSTS.has(base.hostname);
   const remoteOptIn = process.env.SYNAPSE_REMOTE_CAPTURE_ENABLED === "true";
   if (!isLocal && (!remoteOptIn || base.protocol !== "https:")) {
     throw new Error(

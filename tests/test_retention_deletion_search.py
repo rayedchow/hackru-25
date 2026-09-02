@@ -5,7 +5,7 @@ from dataclasses import replace
 from threading import Event
 
 import pytest
-from conftest import FakeOCR, MutableClock
+from conftest import FakeOCR, MutableClock, make_png
 from synapse_memory.config import MemoryConfig
 from synapse_memory.errors import LeaseConflict, OwnerMismatch
 from synapse_memory.models import DeletionState, ProcessingState, RetentionClass
@@ -265,6 +265,68 @@ def test_exhausted_deletion_is_visible_and_not_claimed_again(
     assert vector.state is DeletionState.FAILED
     assert vector.last_error_code == "deletion_attempts_exhausted"
     assert vector.attempts == 1
+
+
+def test_exhausted_old_deletion_does_not_starve_later_expiry(
+    config: MemoryConfig,
+    clock: MutableClock,
+    synthetic_png: bytes,
+) -> None:
+    service = MemoryService(config, clock=clock, ocr_provider=FakeOCR("synthetic evidence"))
+    first, _ = service.ingest(synthetic_png, retention_class=RetentionClass.SESSION)
+    assert service.process_next() is not None
+    clock.advance(seconds=1)
+    second, _ = service.ingest(
+        make_png(color=(78, 45, 12)),
+        retention_class=RetentionClass.SESSION,
+    )
+    assert service.process_next() is not None
+    service.database.begin_deletion(
+        content_id=first.content_id,
+        owner_id=config.owner_id,
+        stores=("vector",),
+        now=clock(),
+    )
+    lease = service.database.claim_store_deletion(
+        content_id=first.content_id,
+        owner_id=config.owner_id,
+        store="vector",
+        now=clock(),
+        lease_seconds=10,
+        max_attempts=1,
+    )
+    assert lease is not None
+    service.database.record_store_deletion(
+        content_id=first.content_id,
+        store="vector",
+        lease_token=lease,
+        state=DeletionState.FAILED,
+        error_code="synthetic_failure",
+        now=clock(),
+    )
+    assert (
+        service.database.claim_store_deletion(
+            content_id=first.content_id,
+            owner_id=config.owner_id,
+            store="vector",
+            now=clock(),
+            lease_seconds=10,
+            max_attempts=1,
+        )
+        is None
+    )
+    clock.advance(days=2)
+
+    receipts = service.sweep_expired(limit=1)
+
+    assert [receipt.content_id for receipt in receipts] == [second.content_id]
+    assert receipts[0].complete is True
+    exhausted = service.database.deletion_receipt(
+        content_id=first.content_id,
+        owner_id=config.owner_id,
+    )
+    assert exhausted.complete is False
+    assert exhausted.stores[0].last_error_code == "deletion_attempts_exhausted"
 
 
 def test_ttl_sweep_removes_expired_item_from_every_configured_store(

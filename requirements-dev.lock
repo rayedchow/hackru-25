@@ -8,6 +8,7 @@ click==8.5.0
 colorama==0.4.6
 coverage==7.16.0
 cryptography==46.0.7
+editables==0.5
 fastapi==0.141.1
 h11==0.16.0
 hatchling==1.32.0

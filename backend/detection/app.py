@@ -6,7 +6,7 @@ Uses OCR to find keywords, falls back to aspect ratio detection.
 from PIL import Image
 
 try:
-    import pytesseract
+    import pytesseract  # type: ignore[import-not-found]
 
     OCR_AVAILABLE = True
 except ImportError:

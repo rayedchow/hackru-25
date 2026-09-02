@@ -2,14 +2,15 @@
 WebSocket management for real-time dashboard updates.
 """
 
-from fastapi import WebSocket, WebSocketDisconnect
 import asyncio
+
+from fastapi import WebSocket, WebSocketDisconnect
 
 # Active WebSocket connections
 connections: list[WebSocket] = []
 
 
-async def websocket_endpoint(websocket: WebSocket):
+async def websocket_endpoint(websocket: WebSocket) -> None:
     """Handle WebSocket connection lifecycle."""
     await websocket.accept()
     connections.append(websocket)
@@ -24,7 +25,7 @@ async def websocket_endpoint(websocket: WebSocket):
             connections.remove(websocket)
 
 
-async def broadcast(message: dict):
+async def broadcast(message: dict[str, object]) -> None:
     """Send message to all connected WebSocket clients."""
     for ws in connections[:]:
         try:

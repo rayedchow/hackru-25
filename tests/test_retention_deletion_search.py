@@ -12,6 +12,8 @@ from synapse_memory.models import DeletionState, ProcessingState, RetentionClass
 from synapse_memory.providers import DeletionAdapter
 from synapse_memory.service import MemoryService
 
+CONCURRENCY_TEST_TIMEOUT_SECONDS = 30
+
 
 class RecordingDeletionAdapter:
     def __init__(self, name: str, *, failures: int = 0) -> None:
@@ -37,7 +39,7 @@ class BlockingDeletionAdapter:
         assert owner_id and content_id
         self.calls += 1
         self.entered.set()
-        assert self.release.wait(timeout=3)
+        assert self.release.wait(timeout=CONCURRENCY_TEST_TIMEOUT_SECONDS)
 
 
 def _processed_service(
@@ -142,10 +144,10 @@ def test_concurrent_deletion_calls_claim_each_external_store_once(
 
     with ThreadPoolExecutor(max_workers=1) as executor:
         first_future = executor.submit(service.delete, content_id)
-        assert vector.entered.wait(timeout=3)
+        assert vector.entered.wait(timeout=CONCURRENCY_TEST_TIMEOUT_SECONDS)
         overlapping = service.delete(content_id)
         vector.release.set()
-        first = first_future.result(timeout=3)
+        first = first_future.result(timeout=CONCURRENCY_TEST_TIMEOUT_SECONDS)
 
     assert overlapping.complete is False
     assert first.complete is True

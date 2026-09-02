@@ -37,7 +37,7 @@ def detect_app(im: Image.Image) -> str:
     # Try OCR-based detection first
     if OCR_AVAILABLE:
         try:
-            text = pytesseract.image_to_string(im).lower()
+            text = pytesseract.image_to_string(im, timeout=5).lower()
             for app, keywords in KEYWORDS.items():
                 if any(keyword in text for keyword in keywords):
                     return app

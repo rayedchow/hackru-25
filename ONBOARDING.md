@@ -50,6 +50,7 @@ The keyring uses restrictive file permissions where the operating system support
 | `SYNAPSE_EXCLUSION_TERMS` | empty | Comma-separated literal terms redacted before storage/remote use. |
 | `SYNAPSE_DISABLE_KEY_AUTOCREATE` | false | When true, a missing keyring causes fail-closed ingestion. |
 | `SYNAPSE_ALLOWED_ORIGINS` | local Next origins | Exact browser origins allowed by CORS. |
+| `SYNAPSE_CAPTURE_MONITOR_ENABLED` | false | Explicitly enables the metadata-only `/ws` capture monitor for allowed origins. |
 | `SYNAPSE_BIND_HOST` | `127.0.0.1` | API bind host. Changing this expands the trust boundary. |
 | `SYNAPSE_BIND_PORT` | `8000` | API port. |
 | `SYNAPSE_REMOTE_ENABLED` | false | Explicit opt-in for remote text processing. |
@@ -85,7 +86,9 @@ synapse-memory process-one
 curl -sS 'http://127.0.0.1:8000/memory/search?q=example'
 ```
 
-Local processing decrypts in memory, performs Tesseract OCR, applies deterministic redaction, records safe image metadata, and stores redacted evidence. It does not call a remote provider. If Tesseract is absent, status remains available and the item records a visible non-looping failure.
+Local processing decrypts in memory, performs Tesseract OCR, applies deterministic redaction, records safe image metadata, and stores redacted evidence. It does not call a remote provider. Renewable claims keep valid long-running work from being reclaimed, and a stale worker still cannot acknowledge after another worker takes ownership. If Tesseract is absent or rejects its configured language data, status remains available and the item records a visible non-looping configuration failure; explicit timeouts retain the bounded retry policy.
+
+When `SYNAPSE_DENIED_SOURCES` is non-empty, the default server enforces the list against the client label and a coarse local app observation before any row or ciphertext is created. Client labels remain untrusted. The bundled detector recognizes only a limited set of indicators and is best-effort rather than DLP; a custom library integration must provide its own local source observer or ingestion fails closed while deny rules are active.
 
 The compatibility `/ask_question` endpoint now returns the same local evidence references. It does not fabricate an answer when evidence is absent.
 
@@ -105,7 +108,7 @@ curl -sS -X DELETE \
   http://127.0.0.1:8000/memory/mem-REPLACE_WITH_SOURCE_ID
 ```
 
-HTTP 200 means every configured store completed; HTTP 202 means at least one deletion is incomplete. Retry the same operation safely. Search exclusion happens before downstream deletion, so partially deleted content cannot be returned.
+HTTP 200 means every configured store completed; HTTP 202 means at least one deletion is incomplete or actively claimed. Retry the same operation safely. Store-level leases prevent overlapping requests from invoking one deletion adapter twice and allow recovery after a crashed lease expires. Search exclusion happens before downstream deletion, so partially deleted content cannot be returned.
 
 ## Optional remote processing
 
@@ -130,7 +133,9 @@ Connection/pool failures may be retried by the bounded queue. Authentication, sc
 synapse-memory rotate-key
 ```
 
-Rotation uses a new active key for future blobs and retains historical keys for old blobs. It does not re-encrypt old data. An exclusive sibling lock prevents concurrent rotations from losing a newly active key. If a process dies during rotation, verify that no rotation is active before manually removing the stale `keyring.json.rotation.lock`. Remove an old key only after proving that no retained blob references it.
+Rotation uses a new active key for future blobs and retains historical keys for old blobs. It does not re-encrypt old data. Running services reload the keyring before later blob access; an upload already in flight when rotation commits may still use the prior retained key. An exclusive sibling lock prevents concurrent rotations from losing a newly active key. If a process dies during rotation, verify that no rotation is active before manually removing the stale `keyring.json.rotation.lock`. Remove an old key only after proving that no retained blob references it.
+
+The optional transient capture monitor is separate from encrypted memory processing. Enable it only for the single-owner local deployment with `SYNAPSE_CAPTURE_MONITOR_ENABLED=true`. `/ws` rejects missing or non-allowlisted browser origins and broadcasts only coarse session/frame/app/scroll metadata, never screenshot bytes. It has no separate login, so do not expose it as a multi-user service.
 
 For a coherent backup, stop writers and copy the keyring, blob directory, SQLite database, and its WAL/SHM files together (or use SQLite's backup API). Key loss is intentionally unrecoverable. Restoring ciphertext without the matching keyring—or a keyring without its database/blob set—is insufficient.
 

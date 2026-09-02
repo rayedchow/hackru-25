@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import base64
+from pathlib import Path
 
 from conftest import FakeOCR, MutableClock
 from fastapi import FastAPI
@@ -17,11 +19,18 @@ def _client(
     clock: MutableClock,
     *,
     observer: object | None = None,
+    observer_timeout_seconds: float = 2.0,
 ) -> TestClient:
     service = MemoryService(config, clock=clock, ocr_provider=FakeOCR())
     app = FastAPI()
     app.add_exception_handler(MemoryPipelineError, memory_error_handler)  # type: ignore[arg-type]
-    app.include_router(memory_router(service, upload_observer=observer))  # type: ignore[arg-type]
+    app.include_router(
+        memory_router(
+            service,
+            upload_observer=observer,  # type: ignore[arg-type]
+            upload_observer_timeout_seconds=observer_timeout_seconds,
+        )
+    )
     return TestClient(app)
 
 
@@ -135,6 +144,30 @@ def test_transient_observer_failure_does_not_hide_successful_ingest(
     }
 
 
+def test_stalled_observer_is_bounded_and_does_not_hide_successful_ingest(
+    config: MemoryConfig,
+    clock: MutableClock,
+    synthetic_png: bytes,
+) -> None:
+    async def stalled_observer(_image: bytes) -> dict[str, object]:
+        await asyncio.Event().wait()
+        raise AssertionError("unreachable")
+
+    with _client(
+        config,
+        clock,
+        observer=stalled_observer,
+        observer_timeout_seconds=0.01,
+    ) as client:
+        payload = _upload(client, synthetic_png)
+
+    assert payload["created"] is True
+    assert payload["capture_event"] == {
+        "type": "capture",
+        "metadata_status": "unavailable",
+    }
+
+
 def test_privacy_status_reports_mode_without_local_paths(
     config: MemoryConfig,
     clock: MutableClock,
@@ -157,6 +190,18 @@ def test_privacy_dashboard_has_accessible_live_status_and_safe_dom_rendering() -
     assert "prefers-reduced-motion" in PRIVACY_DASHBOARD_HTML
     assert "replaceChildren" in PRIVACY_DASHBOARD_HTML
     assert ".innerHTML" not in PRIVACY_DASHBOARD_HTML
+
+
+def test_repository_default_frontends_contain_no_analytics_client() -> None:
+    repository_root = Path(__file__).resolve().parents[1]
+    files = [
+        repository_root / "frontend" / "personal-intelligence-system" / "app" / "layout.tsx",
+        repository_root / "frontend" / "personal-intelligence-system" / "package.json",
+    ]
+
+    combined = "\n".join(path.read_text(encoding="utf-8") for path in files)
+    assert "@vercel/analytics" not in combined
+    assert "<Analytics" not in combined
 
 
 def test_compatibility_routes_remain_local_source_grounded_and_retention_aware(

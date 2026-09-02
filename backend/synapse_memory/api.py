@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import binascii
 import hmac
@@ -49,12 +50,18 @@ def decode_image_payload(payload: str, max_bytes: int) -> bytes:
 
 
 UploadObserver = Callable[[bytes], Awaitable[dict[str, object]]]
+DEFAULT_UPLOAD_OBSERVER_TIMEOUT_SECONDS = 2.0
 logger = logging.getLogger(__name__)
 
 
 def memory_router(
-    service: MemoryService, *, upload_observer: UploadObserver | None = None
+    service: MemoryService,
+    *,
+    upload_observer: UploadObserver | None = None,
+    upload_observer_timeout_seconds: float = DEFAULT_UPLOAD_OBSERVER_TIMEOUT_SECONDS,
 ) -> APIRouter:
+    if upload_observer_timeout_seconds <= 0:
+        raise ValueError("upload observer timeout must be positive")
     router = APIRouter()
 
     def owner_from_header(value: str | None) -> str:
@@ -100,7 +107,10 @@ def memory_router(
         event: dict[str, object] | None = None
         if upload_observer:
             try:
-                event = await upload_observer(image_bytes)
+                event = await asyncio.wait_for(
+                    upload_observer(image_bytes),
+                    timeout=upload_observer_timeout_seconds,
+                )
             except Exception:
                 # The ciphertext and queue row already exist. A best-effort transient
                 # dashboard observation must not turn that success into an ambiguous 5xx.

@@ -28,9 +28,9 @@ jobs:
           python -m pip install --disable-pip-version-check -r requirements-dev.lock
           python -m pip install --disable-pip-version-check --no-deps --no-build-isolation -e .
       - run: python -m pip check
-      - run: ruff format --check backend/synapse_memory backend/server.py backend/dashboard.py tests scripts frontend/brainApp/screenshot_app.py
-      - run: ruff check backend/synapse_memory backend/server.py backend/dashboard.py tests scripts frontend/brainApp/screenshot_app.py
-      - run: mypy backend/synapse_memory backend/server.py backend/dashboard.py
+      - run: ruff format --check backend/synapse_memory backend/server.py backend/dashboard.py backend/ws_manager.py backend/detection/app.py tests scripts frontend/brainApp/screenshot_app.py
+      - run: ruff check backend/synapse_memory backend/server.py backend/dashboard.py backend/ws_manager.py backend/detection/app.py tests scripts frontend/brainApp/screenshot_app.py
+      - run: mypy backend/synapse_memory backend/server.py backend/dashboard.py backend/ws_manager.py backend/detection/app.py
       - name: Scan added lines for secrets
         env:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}

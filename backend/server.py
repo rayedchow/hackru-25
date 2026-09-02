@@ -25,6 +25,21 @@ logging.getLogger("PIL").setLevel(logging.WARNING)
 logger = logging.getLogger("synapse")
 
 
+def _enabled(value: str | None) -> bool:
+    return (value or "").strip().casefold() in {"1", "true", "yes", "on"}
+
+
+class LocalAppSourceProvider:
+    """Observe a coarse app label locally before deny-policy persistence."""
+
+    name = "local-app-detector-v1"
+
+    @staticmethod
+    def detect(image_bytes: bytes) -> str:
+        with Image.open(BytesIO(image_bytes)) as opened:
+            return detect_app(opened.convert("RGB"))
+
+
 class CaptureObserver:
     """Best-effort in-memory UI metadata; screenshot bytes are never broadcast."""
 
@@ -66,37 +81,62 @@ class CaptureObserver:
 
 
 def create_app(
-    *, service: MemoryService | None = None, observer: CaptureObserver | None = None
+    *,
+    service: MemoryService | None = None,
+    observer: CaptureObserver | None = None,
+    capture_monitor_enabled: bool | None = None,
+    allowed_origins: tuple[str, ...] | None = None,
 ) -> FastAPI:
-    selected_service = service or MemoryService(MemoryConfig.from_env())
-    selected_observer = observer or CaptureObserver()
+    if service is None:
+        config = MemoryConfig.from_env()
+        source_provider = LocalAppSourceProvider() if config.denied_sources else None
+        selected_service = MemoryService(config, source_observation_provider=source_provider)
+    else:
+        selected_service = service
+    monitor_enabled = (
+        _enabled(os.getenv("SYNAPSE_CAPTURE_MONITOR_ENABLED"))
+        if capture_monitor_enabled is None
+        else capture_monitor_enabled
+    )
+    selected_observer = (observer or CaptureObserver()) if monitor_enabled else None
     application = FastAPI(
         title="Synapse local memory",
         version="1.0.0",
         description="Local-first encrypted screenshot memory and explicit retention status.",
     )
-    allowed_origins = tuple(
-        value.strip()
-        for value in os.getenv(
-            "SYNAPSE_ALLOWED_ORIGINS", "http://127.0.0.1:3000,http://localhost:3000"
-        ).split(",")
-        if value.strip()
+    selected_origins = (
+        allowed_origins
+        if allowed_origins is not None
+        else tuple(
+            value.strip()
+            for value in os.getenv(
+                "SYNAPSE_ALLOWED_ORIGINS", "http://127.0.0.1:3000,http://localhost:3000"
+            ).split(",")
+            if value.strip()
+        )
     )
     application.add_middleware(
         CORSMiddleware,
-        allow_origins=list(allowed_origins),
+        allow_origins=list(selected_origins),
         allow_credentials=False,
         allow_methods=["GET", "POST", "DELETE"],
         allow_headers=["Content-Type", "Accept", "X-Synapse-Owner", "X-Synapse-Intent"],
     )
     application.add_exception_handler(MemoryPipelineError, memory_error_handler)
     application.include_router(
-        memory_router(selected_service, upload_observer=selected_observer.observe)
+        memory_router(
+            selected_service,
+            upload_observer=selected_observer.observe if selected_observer is not None else None,
+        )
     )
     application.state.memory_service = selected_service
+    application.state.capture_monitor_enabled = monitor_enabled
 
     @application.websocket("/ws")
     async def websocket_endpoint(websocket: WebSocket) -> None:
+        if not monitor_enabled or websocket.headers.get("origin") not in selected_origins:
+            await websocket.close(code=1008)
+            return
         await ws_manager.websocket_endpoint(websocket)
 
     return application

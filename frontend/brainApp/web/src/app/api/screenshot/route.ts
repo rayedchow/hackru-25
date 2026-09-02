@@ -1,87 +1,73 @@
 import { NextRequest, NextResponse } from "next/server";
-import { writeFile, readFile, stat } from "fs/promises";
-import path from "path";
+
+const MAX_UPLOAD_BYTES = 8 * 1024 * 1024;
+const LOCAL_HOSTS = new Set(["127.0.0.1", "localhost", "::1"]);
+
+function backendUploadUrl(): URL {
+  const configured = process.env.SYNAPSE_BACKEND_URL ?? "http://127.0.0.1:8000";
+  const base = new URL(configured);
+  const isLocal = LOCAL_HOSTS.has(base.hostname);
+  const remoteOptIn = process.env.SYNAPSE_REMOTE_CAPTURE_ENABLED === "true";
+  if (!isLocal && (!remoteOptIn || base.protocol !== "https:")) {
+    throw new Error(
+      "A non-local Synapse backend requires explicit remote capture opt-in and HTTPS.",
+    );
+  }
+  return new URL("/upload", base);
+}
 
 export async function POST(request: NextRequest) {
   try {
     const formData = await request.formData();
-    const file = formData.get("image") as File;
-
-    if (!file) {
-      return NextResponse.json({ error: "No file provided" }, { status: 400 });
+    const candidate = formData.get("image");
+    if (!(candidate instanceof File)) {
+      return NextResponse.json({ error: "No image file provided" }, { status: 400 });
+    }
+    if (!candidate.type.startsWith("image/")) {
+      return NextResponse.json({ error: "Unsupported media type" }, { status: 415 });
+    }
+    if (candidate.size < 1 || candidate.size > MAX_UPLOAD_BYTES) {
+      return NextResponse.json({ error: "Image size is outside the allowed range" }, { status: 413 });
     }
 
-    const bytes = await file.arrayBuffer();
-    const buffer = Buffer.from(bytes);
-
-    // Save to public directory
-    const filePath = path.join(process.cwd(), "public", "latest.png");
-    await writeFile(filePath, buffer);
-
-    // Notify WebSocket clients
-    try {
-      if (typeof (global as any).broadcastScreenshotUpdate === "function") {
-        (global as any).broadcastScreenshotUpdate();
-      }
-    } catch (error) {
-      console.log("Could not broadcast screenshot update:", error);
-      // Non-fatal, continue
-    }
-
-    // Also notify Electron if it's running
-    try {
-      await fetch("http://localhost:3001/electron/show", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-      });
-    } catch {
-      // Electron not running, that's fine
-    }
-
-    return NextResponse.json({
-      success: true,
-      url: `/latest.png?t=${Date.now()}`,
+    const bytes = Buffer.from(await candidate.arrayBuffer());
+    const response = await fetch(backendUploadUrl(), {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({
+        type: "video",
+        payload: bytes.toString("base64"),
+        source: "desktop-hotkey",
+      }),
+      signal: AbortSignal.timeout(10_000),
+      cache: "no-store",
     });
+    const result = await response.json();
+    return NextResponse.json(result, { status: response.status });
   } catch (error) {
-    console.error("Error uploading screenshot:", error);
-    return NextResponse.json({ error: "Upload failed" }, { status: 500 });
+    console.error("Local encrypted screenshot ingestion failed", error);
+    return NextResponse.json(
+      { error: "Local encrypted screenshot ingestion failed" },
+      { status: 502 },
+    );
   }
 }
 
-export async function GET(request: NextRequest) {
-  try {
-    const filePath = path.join(process.cwd(), "public", "latest.png");
-
-    // Check if file exists
-    await stat(filePath);
-
-    // Check if we need to return base64
-    const searchParams = request.nextUrl.searchParams;
-    const asBase64 = searchParams.get("base64") === "true";
-
-    if (asBase64) {
-      const buffer = await readFile(filePath);
-      const base64 = buffer.toString("base64");
-      return NextResponse.json({
-        base64,
-      });
-    }
-
-    return NextResponse.json({
-      url: `/latest.png?t=${Date.now()}`,
-    });
-  } catch (error) {
-    return NextResponse.json({ url: null, base64: null });
-  }
+export async function GET() {
+  return NextResponse.json({
+    url: null,
+    base64: null,
+    storage: "encrypted-backend",
+    message: "Raw screenshot previews are not durably retained by the web adapter.",
+  });
 }
 
-export async function DELETE(request: NextRequest) {
-  try {
-    const { unlink } = await import("fs/promises");
-    const filePath = path.join(process.cwd(), "public", "latest.png");
-    await unlink(filePath);
-    return NextResponse.json({ success: true });
-  } catch (error) {
-    return NextResponse.json({ success: false, error: "File not found" }, { status: 404 });
-  }
+export async function DELETE() {
+  return NextResponse.json({
+    deleted: false,
+    scope: "web-adapter-cache",
+    alreadyAbsent: true,
+    message:
+      "The web adapter retains no raw screenshot. Delete encrypted memories by source ID through the privacy status page.",
+  });
 }

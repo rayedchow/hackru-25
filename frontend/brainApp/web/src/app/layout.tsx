@@ -5,7 +5,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Synapse",
-  description: "Personal intelligence system with screenshot integration",
+  description: "Encrypted local-first screenshot memory with source-grounded retrieval",
 };
 
 export default function RootLayout({

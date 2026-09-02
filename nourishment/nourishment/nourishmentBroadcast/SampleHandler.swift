@@ -6,8 +6,21 @@ import UIKit
 final class SampleHandler: RPBroadcastSampleHandler {
 
     // MARK: Config
-    private let uploadURL = URL(string: "https://d73559d3afca.ngrok-free.app/upload")!
     private let chunkSeconds: Double = 2.0
+    private let requestTimeoutSeconds: Double = 10.0
+
+    private var uploadURL: URL? {
+        guard
+            let configured = Bundle.main.object(forInfoDictionaryKey: "SynapseUploadURL") as? String,
+            !configured.isEmpty,
+            !configured.contains("$("),
+            let url = URL(string: configured),
+            url.scheme == "https"
+        else {
+            return nil
+        }
+        return url
+    }
 
     // MARK: State
     private var ciContext = CIContext(options: nil)
@@ -31,6 +44,7 @@ final class SampleHandler: RPBroadcastSampleHandler {
 
     override func broadcastFinished() {
         flushVideoFrame()
+        stateQueue.sync { latestJPEGData.removeAll(keepingCapacity: false) }
         chunkTimer?.cancel()
         chunkTimer = nil
     }
@@ -58,24 +72,36 @@ final class SampleHandler: RPBroadcastSampleHandler {
     }
 
     private func flushVideoFrame() {
+        guard let uploadURL else {
+            print("🔒 SynapseUploadURL is not configured; frame stays on this device")
+            return
+        }
         var toSend = Data()
-        stateQueue.sync { toSend = self.latestJPEGData }
+        stateQueue.sync {
+            toSend = self.latestJPEGData
+            self.latestJPEGData.removeAll(keepingCapacity: false)
+        }
         guard !toSend.isEmpty else {
             print("⚠️ No video frame to send")
             return
         }
         print("📹 Sending video frame (\(toSend.count) bytes)")
         let b64 = toSend.base64EncodedString()
-        postJSON(["type":"video","payload":b64])
+        postJSON(["type":"video","payload":b64,"source":"ios-replaykit"], to: uploadURL)
     }
 
     // MARK: Minimal POST
-    private func postJSON(_ obj: [String: Any]) {
+    private func postJSON(_ obj: [String: Any], to uploadURL: URL) {
         guard let body = try? JSONSerialization.data(withJSONObject: obj) else { return }
         var req = URLRequest(url: uploadURL)
         req.httpMethod = "POST"
+        req.timeoutInterval = requestTimeoutSeconds
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = body
-        URLSession(configuration: .ephemeral).dataTask(with: req).resume()
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.waitsForConnectivity = false
+        configuration.timeoutIntervalForRequest = requestTimeoutSeconds
+        configuration.timeoutIntervalForResource = requestTimeoutSeconds
+        URLSession(configuration: configuration).dataTask(with: req).resume()
     }
 }

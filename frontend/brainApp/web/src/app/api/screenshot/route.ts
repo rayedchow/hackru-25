@@ -1,7 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 
 const MAX_UPLOAD_BYTES = 8 * 1024 * 1024;
-const LOCAL_HOSTS = new Set(["127.0.0.1", "localhost", "::1"]);
+const LOCAL_ORIGINS = new Set(["http://127.0.0.1:3000", "http://localhost:3000"]);
+const LOCAL_HOST_PATTERN = /^(?:(?:127\.0\.0\.1|localhost)(?::\d{1,5})?|\[::1\](?::\d{1,5})?)$/;
+
+function trustedBrowserRequest(request: NextRequest): boolean {
+  const origin = request.headers.get("origin");
+  const host = request.headers.get("host") ?? "";
+  return (!origin || LOCAL_ORIGINS.has(origin)) && LOCAL_HOST_PATTERN.test(host);
+}
 
 function backendUploadUrl(): URL {
   const configured = process.env.SYNAPSE_BACKEND_URL ?? "http://127.0.0.1:8000";
@@ -17,6 +24,9 @@ function backendUploadUrl(): URL {
 }
 
 export async function POST(request: NextRequest) {
+  if (!trustedBrowserRequest(request)) {
+    return NextResponse.json({ error: "Untrusted local browser request" }, { status: 403 });
+  }
   try {
     const formData = await request.formData();
     const candidate = formData.get("image");

@@ -22,7 +22,7 @@ SQLite metadata is not encrypted in v1. It includes content hashes, capture/expi
 - The iOS extension has no default upload URL.
 - The desktop adapter targets loopback. A non-loopback target requires explicit opt-in and HTTPS.
 - Legacy Gemini, Neo4j, and PostgreSQL modules are not imported by the default server.
-- The metadata-only capture monitor and WebSocket are disabled by default. Explicit enablement still requires an exact allowlisted browser origin; this is origin isolation for a single local owner, not user authentication.
+- The API, web server, and Electron control listener bind to loopback by default. The API also validates the HTTP `Host`, and browser HTTP/WebSocket paths require exact allowlisted origins. These controls address cross-site and DNS-rebinding access for a single local owner; they are not multi-user authentication or protection from another process already controlling the host.
 
 Tests block non-loopback socket access (while permitting the in-process loopback test harness) and prove a supplied remote spy receives zero calls in local-only mode. This does not verify behavior of arbitrary third-party binaries such as Tesseract.
 
@@ -48,7 +48,7 @@ OCR text is a data field in a strict request schema. It is never evaluated as a 
 
 ## Retention and deletion semantics
 
-Deletion first changes state to `deleting` and clears search text within SQLite. Each configured store has an independent status, attempt count, and renewable claim. Overlapping requests cannot concurrently execute one adapter, and a crashed store claim becomes retryable after its lease expires. `deleted` is reached only when all configured stores report complete; unavailable adapters remain visible as failure. Repetition is idempotent.
+Deletion first changes state to `deleting` and clears search text within SQLite. Each configured store has an independent status, attempt count, and renewable claim. Overlapping requests cannot concurrently execute one adapter, and a crashed store claim becomes retryable after its lease expires. Automatic attempts are capped; an exhausted store remains failed with `deletion_attempts_exhausted` and requires operator repair. `deleted` is reached only when all configured stores report complete; unavailable adapters remain visible as failure. Repetition is idempotent.
 
 This mechanism cannot delete external copies, unregistered stores, crash dumps, backups, filesystem snapshots, or screenshots retained by the capture OS/application. `not_configured` means a store was not used by this local deployment; it is not evidence that no external copy exists.
 

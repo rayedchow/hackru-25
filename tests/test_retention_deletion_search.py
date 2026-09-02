@@ -217,6 +217,56 @@ def test_crashed_deletion_claim_recovers_after_lease_expiry(
     assert vector.attempts == 2
 
 
+def test_exhausted_deletion_is_visible_and_not_claimed_again(
+    config: MemoryConfig,
+    clock: MutableClock,
+    synthetic_png: bytes,
+) -> None:
+    service, content_id = _processed_service(config, clock, synthetic_png)
+    service.database.begin_deletion(
+        content_id=content_id,
+        owner_id=config.owner_id,
+        stores=("vector",),
+        now=clock(),
+    )
+    lease = service.database.claim_store_deletion(
+        content_id=content_id,
+        owner_id=config.owner_id,
+        store="vector",
+        now=clock(),
+        lease_seconds=10,
+        max_attempts=1,
+    )
+    assert lease is not None
+    service.database.record_store_deletion(
+        content_id=content_id,
+        store="vector",
+        lease_token=lease,
+        state=DeletionState.FAILED,
+        error_code="synthetic_failure",
+        now=clock(),
+    )
+
+    repeated = service.database.claim_store_deletion(
+        content_id=content_id,
+        owner_id=config.owner_id,
+        store="vector",
+        now=clock(),
+        lease_seconds=10,
+        max_attempts=1,
+    )
+    receipt = service.database.deletion_receipt(
+        content_id=content_id,
+        owner_id=config.owner_id,
+    )
+    vector = next(item for item in receipt.stores if item.store == "vector")
+
+    assert repeated is None
+    assert vector.state is DeletionState.FAILED
+    assert vector.last_error_code == "deletion_attempts_exhausted"
+    assert vector.attempts == 1
+
+
 def test_ttl_sweep_removes_expired_item_from_every_configured_store(
     config: MemoryConfig,
     clock: MutableClock,

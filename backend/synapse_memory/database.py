@@ -23,6 +23,7 @@ from .models import (
 )
 
 DATABASE_SCHEMA_VERSION = 1
+MAX_DELETION_ATTEMPTS = 100
 STATE_VALUES = tuple(state.value for state in ProcessingState)
 RETENTION_VALUES = tuple(value.value for value in RetentionClass)
 DELETION_VALUES = tuple(value.value for value in DeletionState)
@@ -550,7 +551,7 @@ class MemoryDatabase:
         store: str,
         now: datetime,
         lease_seconds: int,
-        max_attempts: int = 100,
+        max_attempts: int = MAX_DELETION_ATTEMPTS,
     ) -> str | None:
         """Atomically claim one pending/failed or lease-expired store deletion."""
 
@@ -570,7 +571,26 @@ class MemoryDatabase:
                 and row["lease_expires_at"] is not None
                 and row["lease_expires_at"] < _iso(now)
             )
-            if not eligible or row["attempts"] >= max_attempts:
+            if eligible and row["attempts"] >= max_attempts:
+                connection.execute(
+                    """
+                    UPDATE deletion_status
+                    SET state = ?, last_error_code = ?, lease_token = NULL,
+                        lease_expires_at = NULL, updated_at = ?
+                    WHERE content_id = ? AND store = ? AND state = ? AND attempts = ?
+                    """,
+                    (
+                        DeletionState.FAILED.value,
+                        "deletion_attempts_exhausted",
+                        _iso(now),
+                        content_id,
+                        store,
+                        row["state"],
+                        row["attempts"],
+                    ),
+                )
+                return None
+            if not eligible:
                 return None
             lease_token = secrets.token_urlsafe(24)
             cursor = connection.execute(

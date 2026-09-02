@@ -4,6 +4,7 @@ import asyncio
 import importlib
 import io
 import sys
+from dataclasses import replace
 from pathlib import Path
 from types import ModuleType
 
@@ -13,6 +14,7 @@ from fastapi.testclient import TestClient
 from PIL import Image
 from starlette.websockets import WebSocketDisconnect
 from synapse_memory.config import MemoryConfig
+from synapse_memory.errors import ContentDenied
 from synapse_memory.service import MemoryService
 
 
@@ -35,7 +37,7 @@ def test_capture_metadata_websocket_is_disabled_by_default(
     server_module: ModuleType,
     tmp_path: Path,
 ) -> None:
-    app = server_module.create_app(service=_service(tmp_path))
+    app = server_module.create_app(service=_service(tmp_path), allowed_hosts=("testserver",))
 
     with (
         TestClient(app) as client,
@@ -59,6 +61,7 @@ def test_capture_metadata_websocket_requires_an_exact_allowed_origin(
         service=_service(tmp_path),
         capture_monitor_enabled=True,
         allowed_origins=(allowed,),
+        allowed_hosts=("testserver",),
     )
 
     with TestClient(app) as client:
@@ -116,3 +119,81 @@ def test_legacy_local_app_detection_applies_a_subprocess_deadline(
         assert detection.detect_app(image) == "youtube"
 
     assert observed_timeout == [5]
+
+
+def test_http_api_rejects_dns_rebinding_host_and_untrusted_origin(
+    server_module: ModuleType,
+    tmp_path: Path,
+    synthetic_png: bytes,
+) -> None:
+    service = _service(tmp_path)
+    envelope, _ = service.ingest(synthetic_png, source="synthetic")
+    app = server_module.create_app(
+        service=service,
+        allowed_hosts=("testserver",),
+        allowed_origins=("http://127.0.0.1:3000",),
+    )
+
+    with TestClient(app) as client:
+        rebound = client.get("/privacy/status", headers={"host": "attacker.invalid"})
+        cross_origin = client.get("/privacy/status", headers={"origin": "https://attacker.invalid"})
+        rebound_delete = client.delete(
+            f"/memory/{envelope.content_id}",
+            headers={
+                "host": "attacker.invalid",
+                "x-synapse-owner": service.config.owner_id,
+                "x-synapse-intent": "delete",
+            },
+        )
+        local = client.get("/privacy/status")
+
+    assert rebound.status_code == 400
+    assert cross_origin.status_code == 403
+    assert cross_origin.json()["error"] == "untrusted_origin"
+    assert rebound_delete.status_code == 400
+    assert (
+        service.database.get(envelope.content_id, service.config.owner_id).envelope.state.value
+        == "stored"
+    )
+    assert local.status_code == 200
+
+
+def test_source_detector_uses_declared_local_ocr_boundary(
+    server_module: ModuleType,
+    synthetic_png: bytes,
+) -> None:
+    class YouTubeOCR:
+        @staticmethod
+        def extract_text(_image_bytes: bytes) -> str:
+            return "Synthetic YouTube subscribe label"
+
+    provider = server_module.LocalAppSourceProvider()
+    provider._ocr = YouTubeOCR()
+
+    assert provider.detect(synthetic_png) == "youtube"
+
+
+def test_declared_deny_rule_rejects_observed_source_before_persistence(
+    server_module: ModuleType,
+    tmp_path: Path,
+    synthetic_png: bytes,
+) -> None:
+    class YouTubeOCR:
+        @staticmethod
+        def extract_text(_image_bytes: bytes) -> str:
+            return "Synthetic YouTube subscribe label"
+
+    provider = server_module.LocalAppSourceProvider()
+    provider._ocr = YouTubeOCR()
+    config = replace(MemoryConfig(data_root=tmp_path / "denied"), denied_sources=("youtube",))
+    service = MemoryService(
+        config,
+        ocr_provider=FakeOCR(),
+        source_observation_provider=provider,
+    )
+
+    with pytest.raises(ContentDenied):
+        service.ingest(synthetic_png, source="desktop-hotkey")
+
+    assert list(config.blob_root.glob("*")) == []
+    assert all(count == 0 for count in service.database.state_counts(config.owner_id).values())

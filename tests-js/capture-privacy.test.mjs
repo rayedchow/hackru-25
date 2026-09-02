@@ -11,7 +11,20 @@ test("Next capture adapter defaults to loopback and never caches raw images", ()
   assert.match(source, /SYNAPSE_REMOTE_CAPTURE_ENABLED/);
   assert.match(source, /base\.protocol !== "https:"/);
   assert.match(source, /AbortSignal\.timeout\(10_000\)/);
+  assert.match(source, /trustedBrowserRequest/);
+  assert.match(source, /LOCAL_ORIGINS/);
   assert.doesNotMatch(source, /writeFile|latest\.png|public\/latest/);
+});
+
+test("active local listeners and screenshot websocket are loopback and origin constrained", () => {
+  const server = read("frontend/brainApp/web/server.js");
+  const electron = read("frontend/brainApp/web/electron/main.js");
+
+  assert.match(server, /SYNAPSE_WEB_BIND_HOST \|\| "127\.0\.0\.1"/);
+  assert.match(server, /server\.listen\(port, hostname/);
+  assert.match(server, /allowedOrigins\.has\(origin\)/);
+  assert.match(electron, /listen\(3001, "127\.0\.0\.1"/);
+  assert.match(electron, /untrusted_origin/);
 });
 
 test("macOS capture streams bytes in memory to local services", () => {

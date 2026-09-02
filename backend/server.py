@@ -7,18 +7,22 @@ import logging
 import os
 import time
 import uuid
+from collections.abc import Awaitable, Callable
 from io import BytesIO
 
 import uvicorn
 import ws_manager
-from detection.app import detect_app
+from detection.app import KEYWORDS, detect_app
 from detection.scroll import detect_scroll
-from fastapi import FastAPI, WebSocket
+from fastapi import FastAPI, Request, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse, Response
 from PIL import Image
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 from synapse_memory import MemoryConfig, MemoryService
 from synapse_memory.api import memory_error_handler, memory_router
 from synapse_memory.errors import MemoryPipelineError
+from synapse_memory.providers import TesseractOCRProvider
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s:%(message)s")
 logging.getLogger("PIL").setLevel(logging.WARNING)
@@ -34,10 +38,15 @@ class LocalAppSourceProvider:
 
     name = "local-app-detector-v1"
 
-    @staticmethod
-    def detect(image_bytes: bytes) -> str:
-        with Image.open(BytesIO(image_bytes)) as opened:
-            return detect_app(opened.convert("RGB"))
+    def __init__(self) -> None:
+        self._ocr = TesseractOCRProvider(timeout_seconds=5)
+
+    def detect(self, image_bytes: bytes) -> str:
+        text = self._ocr.extract_text(image_bytes).casefold()
+        for app_name, keywords in KEYWORDS.items():
+            if any(keyword in text for keyword in keywords):
+                return app_name
+        return "unknown"
 
 
 class CaptureObserver:
@@ -86,6 +95,7 @@ def create_app(
     observer: CaptureObserver | None = None,
     capture_monitor_enabled: bool | None = None,
     allowed_origins: tuple[str, ...] | None = None,
+    allowed_hosts: tuple[str, ...] | None = None,
 ) -> FastAPI:
     if service is None:
         config = MemoryConfig.from_env()
@@ -115,6 +125,34 @@ def create_app(
             if value.strip()
         )
     )
+    selected_hosts = (
+        allowed_hosts
+        if allowed_hosts is not None
+        else tuple(
+            value.strip()
+            for value in os.getenv("SYNAPSE_ALLOWED_HOSTS", "127.0.0.1,localhost,[::1]").split(",")
+            if value.strip()
+        )
+    )
+    application.add_middleware(TrustedHostMiddleware, allowed_hosts=list(selected_hosts))
+
+    @application.middleware("http")
+    async def reject_untrusted_browser_origin(
+        request: Request,
+        call_next: Callable[[Request], Awaitable[Response]],
+    ) -> Response:
+        origin = request.headers.get("origin")
+        if origin is not None and origin not in selected_origins:
+            return JSONResponse(
+                status_code=403,
+                content={
+                    "ok": False,
+                    "error": "untrusted_origin",
+                    "message": "The browser origin is not allowed by local policy.",
+                },
+            )
+        return await call_next(request)
+
     application.add_middleware(
         CORSMiddleware,
         allow_origins=list(selected_origins),

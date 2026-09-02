@@ -49,7 +49,7 @@ PRIVACY_DASHBOARD_HTML = """<!doctype html>
   <div class="grid" aria-label="Memory status summary">
     <article class="card"><div class="eyebrow">Queued</div><p class="metric" id="queued">—</p><span class="lead">Stored and waiting</span></article>
     <article class="card"><div class="eyebrow">Failed</div><p class="metric" id="failed">—</p><span class="lead">Visible; retries are bounded</span></article>
-    <article class="card"><div class="eyebrow">Deletion issues</div><p class="metric" id="delete-failed">—</p><span class="lead">Remain retryable</span></article>
+    <article class="card"><div class="eyebrow">Deletion issues</div><p class="metric" id="delete-failed">—</p><span class="lead">Retries are bounded; exhausted items need operator action</span></article>
     <article class="card"><div class="eyebrow">Retention</div><p class="metric"><span id="retention">—</span> days</p><span class="lead">Default class</span></article>
   </div>
 

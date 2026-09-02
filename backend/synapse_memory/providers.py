@@ -52,6 +52,14 @@ class RemoteProcessingProvider(Protocol):
     def process(self, request: RemoteProcessingRequest) -> RemoteProcessingResponse: ...
 
 
+class SourceObservationProvider(Protocol):
+    """Best-effort local source observation used only for deny-policy enforcement."""
+
+    name: str
+
+    def detect(self, image_bytes: bytes) -> str | None: ...
+
+
 class DeletionAdapter(Protocol):
     name: str
 
@@ -81,7 +89,12 @@ class TesseractOCRProvider:
         except subprocess.TimeoutExpired as exc:
             raise ProviderTimeout("Local OCR exceeded its processing deadline.") from exc
         if completed.returncode != 0:
-            raise ProviderUnavailable("Local OCR could not process this image.")
+            # A nonzero Tesseract exit is normally a deterministic local
+            # configuration/language-data failure. Retrying the same bytes cannot
+            # repair it, so keep this distinct from explicit timeouts.
+            raise ConfigurationError(
+                "Local OCR rejected the image; verify the configured language data."
+            )
         return completed.stdout.decode("utf-8", errors="replace")[:20_000]
 
 
@@ -101,6 +114,8 @@ class DeterministicImageProvider:
                 if metadata.width * metadata.height > MAX_IMAGE_PIXELS:
                     raise InvalidUpload("The image dimensions exceed the configured safety limit.")
                 image.load()
+        except Image.DecompressionBombError as exc:
+            raise InvalidUpload("The image dimensions exceed the configured safety limit.") from exc
         except (UnidentifiedImageError, OSError, ValueError) as exc:
             raise InvalidUpload("The payload is not a supported image.") from exc
         caption = f"Local {metadata.format} image ({metadata.width} x {metadata.height})."
@@ -128,6 +143,15 @@ class DisabledRemoteProvider:
     def process(self, request: RemoteProcessingRequest) -> RemoteProcessingResponse:
         del request
         raise RemoteProcessingDisabled("Remote processing is disabled in local-only mode.")
+
+
+@dataclass(slots=True)
+class DisabledSourceObservationProvider:
+    name: str = "disabled"
+
+    def detect(self, image_bytes: bytes) -> str | None:
+        del image_bytes
+        return None
 
 
 class HTTPRemoteProvider:

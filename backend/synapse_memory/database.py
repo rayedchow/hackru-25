@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import secrets
 import sqlite3
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -77,6 +77,8 @@ CREATE TABLE IF NOT EXISTS deletion_status (
     state TEXT NOT NULL CHECK(state IN ({_sql_values(DELETION_VALUES)})),
     attempts INTEGER NOT NULL DEFAULT 0 CHECK(attempts >= 0),
     last_error_code TEXT,
+    lease_token TEXT,
+    lease_expires_at TEXT,
     updated_at TEXT NOT NULL,
     PRIMARY KEY(content_id, store)
 );
@@ -173,7 +175,13 @@ class MemoryDatabase:
             return int(connection.execute("PRAGMA user_version").fetchone()[0])
 
     def create_received(
-        self, envelope: IngestionEnvelope, *, owner_id: str, now: datetime
+        self,
+        envelope: IngestionEnvelope,
+        *,
+        owner_id: str,
+        blob_name: str,
+        key_id: str,
+        now: datetime,
     ) -> tuple[MemoryRecord, bool]:
         timestamp = _iso(now)
         with self._transaction(immediate=True) as connection:
@@ -182,9 +190,9 @@ class MemoryDatabase:
                 INSERT INTO memory_items (
                     content_id, owner_id, content_hash, captured_at, device_pseudonym,
                     state, consent_version, retention_class, expires_at,
-                    provider_version, policy_version, retry_count, version,
+                    provider_version, policy_version, retry_count, version, blob_name, key_id,
                     created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(owner_id, content_hash) DO NOTHING
                 """,
                 (
@@ -201,6 +209,8 @@ class MemoryDatabase:
                     envelope.policy_version,
                     envelope.retry_count,
                     envelope.version,
+                    blob_name,
+                    key_id,
                     timestamp,
                     timestamp,
                 ),
@@ -378,6 +388,37 @@ class MemoryDatabase:
                 raise LeaseConflict("The processing lease is stale or no longer owned.")
             return self._owned_record(connection, content_id, owner_id)
 
+    def renew_processing_lease(
+        self,
+        *,
+        content_id: str,
+        owner_id: str,
+        lease_token: str,
+        clock: Callable[[], datetime],
+        lease_seconds: int,
+    ) -> None:
+        """Extend a live processing claim without allowing stale-owner revival."""
+
+        with self._transaction(immediate=True) as connection:
+            now = _utc(clock())
+            cursor = connection.execute(
+                """
+                UPDATE memory_items
+                SET lease_expires_at = ?, updated_at = ?, version = version + 1
+                WHERE content_id = ? AND owner_id = ? AND state = ? AND lease_token = ?
+                """,
+                (
+                    _iso(now + timedelta(seconds=lease_seconds)),
+                    _iso(now),
+                    content_id,
+                    owner_id,
+                    ProcessingState.PROCESSING.value,
+                    lease_token,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise LeaseConflict("The processing lease is stale or no longer owned.")
+
     def mark_failed(
         self,
         *,
@@ -469,21 +510,173 @@ class MemoryDatabase:
         *,
         content_id: str,
         store: str,
+        lease_token: str,
         state: DeletionState,
         error_code: str | None,
         now: datetime,
     ) -> None:
         with self._transaction(immediate=True) as connection:
+            if state not in {
+                DeletionState.COMPLETE,
+                DeletionState.FAILED,
+                DeletionState.NOT_CONFIGURED,
+            }:
+                raise ValueError("a deletion claim may only finish in a terminal store state")
             cursor = connection.execute(
                 """
                 UPDATE deletion_status
-                SET state = ?, attempts = attempts + 1, last_error_code = ?, updated_at = ?
-                WHERE content_id = ? AND store = ?
+                SET state = ?, last_error_code = ?, lease_token = NULL,
+                    lease_expires_at = NULL, updated_at = ?
+                WHERE content_id = ? AND store = ? AND state = ? AND lease_token = ?
                 """,
-                (state.value, error_code, _iso(now), content_id, store),
+                (
+                    state.value,
+                    error_code,
+                    _iso(now),
+                    content_id,
+                    store,
+                    DeletionState.PROCESSING.value,
+                    lease_token,
+                ),
             )
             if cursor.rowcount != 1:
+                raise LeaseConflict("The deletion-store lease is stale or no longer owned.")
+
+    def claim_store_deletion(
+        self,
+        *,
+        content_id: str,
+        owner_id: str,
+        store: str,
+        now: datetime,
+        lease_seconds: int,
+        max_attempts: int = 100,
+    ) -> str | None:
+        """Atomically claim one pending/failed or lease-expired store deletion."""
+
+        with self._transaction(immediate=True) as connection:
+            self._owned_record(connection, content_id, owner_id)
+            row = connection.execute(
+                "SELECT * FROM deletion_status WHERE content_id = ? AND store = ?",
+                (content_id, store),
+            ).fetchone()
+            if row is None:
                 raise ItemNotFound("The deletion store record does not exist.")
+            eligible = row["state"] in {
+                DeletionState.PENDING.value,
+                DeletionState.FAILED.value,
+            } or (
+                row["state"] == DeletionState.PROCESSING.value
+                and row["lease_expires_at"] is not None
+                and row["lease_expires_at"] < _iso(now)
+            )
+            if not eligible or row["attempts"] >= max_attempts:
+                return None
+            lease_token = secrets.token_urlsafe(24)
+            cursor = connection.execute(
+                """
+                UPDATE deletion_status
+                SET state = ?, attempts = attempts + 1, last_error_code = NULL,
+                    lease_token = ?, lease_expires_at = ?, updated_at = ?
+                WHERE content_id = ? AND store = ? AND state = ?
+                  AND attempts = ?
+                  AND (lease_token IS ? OR lease_token = ?)
+                """,
+                (
+                    DeletionState.PROCESSING.value,
+                    lease_token,
+                    _iso(now + timedelta(seconds=lease_seconds)),
+                    _iso(now),
+                    content_id,
+                    store,
+                    row["state"],
+                    row["attempts"],
+                    row["lease_token"],
+                    row["lease_token"],
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise LeaseConflict("Another worker claimed this deletion store.")
+            return lease_token
+
+    def renew_store_deletion_lease(
+        self,
+        *,
+        content_id: str,
+        store: str,
+        lease_token: str,
+        clock: Callable[[], datetime],
+        lease_seconds: int,
+    ) -> None:
+        with self._transaction(immediate=True) as connection:
+            now = _utc(clock())
+            cursor = connection.execute(
+                """
+                UPDATE deletion_status
+                SET lease_expires_at = ?, updated_at = ?
+                WHERE content_id = ? AND store = ? AND state = ? AND lease_token = ?
+                """,
+                (
+                    _iso(now + timedelta(seconds=lease_seconds)),
+                    _iso(now),
+                    content_id,
+                    store,
+                    DeletionState.PROCESSING.value,
+                    lease_token,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise LeaseConflict("The deletion-store lease is stale or no longer owned.")
+
+    def record_orphan_cleanup_failure(
+        self,
+        *,
+        content_id: str,
+        owner_id: str,
+        blob_name: str,
+        key_id: str,
+        error_code: str,
+        now: datetime,
+    ) -> None:
+        """Keep a late ciphertext reference visible when compensating deletion fails."""
+
+        with self._transaction(immediate=True) as connection:
+            self._owned_record(connection, content_id, owner_id)
+            cursor = connection.execute(
+                """
+                UPDATE memory_items
+                SET state = ?, blob_name = ?, key_id = ?, updated_at = ?, version = version + 1
+                WHERE content_id = ? AND owner_id = ? AND state IN (?, ?)
+                """,
+                (
+                    ProcessingState.DELETING.value,
+                    blob_name,
+                    key_id,
+                    _iso(now),
+                    content_id,
+                    owner_id,
+                    ProcessingState.DELETING.value,
+                    ProcessingState.DELETED.value,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise LeaseConflict("The memory is no longer in a deletable cleanup state.")
+            connection.execute(
+                """
+                INSERT INTO deletion_status (
+                    content_id, store, state, attempts, last_error_code,
+                    lease_token, lease_expires_at, updated_at
+                ) VALUES (?, 'encrypted_blob', ?, 1, ?, NULL, NULL, ?)
+                ON CONFLICT(content_id, store) DO UPDATE SET
+                    state = excluded.state,
+                    attempts = min(100, deletion_status.attempts + 1),
+                    last_error_code = excluded.last_error_code,
+                    lease_token = NULL,
+                    lease_expires_at = NULL,
+                    updated_at = excluded.updated_at
+                """,
+                (content_id, DeletionState.FAILED.value, error_code, _iso(now)),
+            )
 
     def finalize_deletion(
         self, *, content_id: str, owner_id: str, now: datetime

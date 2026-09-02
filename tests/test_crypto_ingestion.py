@@ -7,9 +7,10 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
+import synapse_memory.crypto as crypto_module
 from conftest import FakeOCR, MutableClock, make_png
 from synapse_memory.config import MemoryConfig
-from synapse_memory.crypto import EncryptedBlobStore, Keyring, load_keyring
+from synapse_memory.crypto import EncryptedBlobStore, Keyring, load_keyring, load_or_create_keyring
 from synapse_memory.errors import EncryptionKeyUnavailable, InvalidUpload, StorageIntegrityError
 from synapse_memory.models import ProcessingState
 from synapse_memory.service import MemoryService
@@ -132,6 +133,41 @@ def test_rotation_keeps_old_blob_decryptable(
     )
 
 
+def test_running_service_observes_key_rotated_by_another_process(
+    config: MemoryConfig, clock: MutableClock
+) -> None:
+    running = MemoryService(config, clock=clock, ocr_provider=FakeOCR())
+    rotating_process = MemoryService(config, clock=clock, ocr_provider=FakeOCR())
+    assert running.keyring is not None
+    old_key_id = running.keyring.active_key_id
+
+    new_key_id = rotating_process.rotate_key()
+    envelope, _ = running.ingest(make_png(color=(22, 33, 44)))
+    stored = running.database.get(envelope.content_id, config.owner_id)
+
+    assert new_key_id != old_key_id
+    assert stored.key_id == new_key_id
+
+
+def test_interrupted_first_keyring_publication_leaves_no_partial_final_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    keyring_path = tmp_path / "private" / "keyring.json"
+
+    with monkeypatch.context() as context:
+        context.setattr(
+            crypto_module.os,
+            "link",
+            lambda _source, _target: (_ for _ in ()).throw(OSError("synthetic crash")),
+        )
+        with pytest.raises(EncryptionKeyUnavailable, match="could not be created"):
+            load_or_create_keyring(keyring_path, auto_create=True)
+
+    assert not keyring_path.exists()
+    assert list(keyring_path.parent.glob(".synapse-*.tmp")) == []
+    assert load_or_create_keyring(keyring_path, auto_create=True).active_key_id.startswith("key-")
+
+
 def test_rotation_lock_fails_closed_without_changing_active_key(
     config: MemoryConfig,
     clock: MutableClock,
@@ -167,7 +203,9 @@ def test_oversized_image_dimensions_are_rejected_before_pixel_decode(
     synthetic_png: bytes,
 ) -> None:
     oversized = bytearray(synthetic_png)
-    struct.pack_into(">II", oversized, 16, 10_000, 5_000)
+    # This exceeds Pillow's hard decompression-bomb threshold as well as the
+    # service's own pixel budget and must still map to the structured 400 boundary.
+    struct.pack_into(">II", oversized, 16, 20_000, 10_000)
     struct.pack_into(">I", oversized, 29, zlib.crc32(oversized[12:29]) & 0xFFFFFFFF)
     service = MemoryService(config, clock=clock, ocr_provider=FakeOCR())
 

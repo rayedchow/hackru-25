@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import subprocess
 from dataclasses import replace
 
 import pytest
@@ -11,6 +12,7 @@ from synapse_memory.models import (
     RemoteProcessingRequest,
     RemoteProcessingResponse,
 )
+from synapse_memory.providers import TesseractOCRProvider
 from synapse_memory.service import MemoryService
 
 
@@ -187,6 +189,37 @@ def test_nonretryable_failure_is_not_looped_or_reactivated_by_duplicate_upload(
     assert service.process_next() is None
     assert ocr.calls == 1
     assert service.database.get(envelope.content_id, config.owner_id).envelope.retry_count == 1
+
+
+def test_tesseract_nonzero_exit_is_deterministic_and_not_retried(
+    config: MemoryConfig,
+    clock: MutableClock,
+    synthetic_png: bytes,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+
+    def rejected(*_args: object, **_kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        nonlocal calls
+        calls += 1
+        return subprocess.CompletedProcess([], 1, stdout=b"", stderr=b"missing language data")
+
+    monkeypatch.setattr(subprocess, "run", rejected)
+    service = MemoryService(
+        config,
+        clock=clock,
+        ocr_provider=TesseractOCRProvider(),
+    )
+    service.ingest(synthetic_png)
+
+    failed = service.process_next()
+    clock.advance(days=1)
+
+    assert failed is not None and failed.envelope.failure is not None
+    assert failed.envelope.failure.code == "configuration_error"
+    assert failed.envelope.failure.retryable is False
+    assert service.process_next() is None
+    assert calls == 1
 
 
 def test_expired_claim_recovers_and_counts_against_crash_limit(

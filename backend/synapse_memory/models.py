@@ -37,6 +37,7 @@ class RetentionClass(StrEnum):
 
 class DeletionState(StrEnum):
     PENDING = "pending"
+    PROCESSING = "processing"
     COMPLETE = "complete"
     FAILED = "failed"
     NOT_CONFIGURED = "not_configured"

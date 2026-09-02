@@ -3,6 +3,7 @@ from __future__ import annotations
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Event
 
 import httpx
 import pytest
@@ -44,7 +45,11 @@ def test_migration_up_and_down_are_reversible(tmp_path: Path) -> None:
                 "SELECT name FROM sqlite_master WHERE type = 'table'"
             ).fetchall()
         }
+        deletion_columns = {
+            row[1] for row in connection.execute("PRAGMA table_info(deletion_status)").fetchall()
+        }
     assert {"memory_items", "deletion_status"} <= tables
+    assert {"lease_token", "lease_expires_at"} <= deletion_columns
 
     database.migrate_down()
 
@@ -102,6 +107,64 @@ def test_duplicate_concurrent_ingest_creates_one_canonical_item_and_blob(
     assert len(list(config.blob_root.glob("*.blob"))) == 1
 
 
+def test_delete_winning_between_blob_write_and_database_mark_leaves_no_orphan(
+    config: MemoryConfig,
+    clock: MutableClock,
+    synthetic_png: bytes,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = MemoryService(config, clock=clock, ocr_provider=FakeOCR())
+    original_mark = service.database.mark_stored
+
+    def delete_then_mark(**kwargs: object):  # type: ignore[no-untyped-def]
+        service.delete(str(kwargs["content_id"]))
+        return original_mark(**kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(service.database, "mark_stored", delete_then_mark)
+
+    envelope, _ = service.ingest(synthetic_png)
+
+    assert envelope.state is ProcessingState.DELETED
+    assert list(config.blob_root.glob("*.blob")) == []
+
+
+def test_failed_racing_blob_deletion_is_visible_and_retryable(
+    config: MemoryConfig,
+    clock: MutableClock,
+    synthetic_png: bytes,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = MemoryService(config, clock=clock, ocr_provider=FakeOCR())
+    assert service.blobs is not None
+    original_store = service.blobs.store
+
+    def delete_then_store(**kwargs: object):  # type: ignore[no-untyped-def]
+        service.delete(str(kwargs["content_id"]))
+        return original_store(**kwargs)  # type: ignore[arg-type]
+
+    def fail_cleanup(_blob_name: str) -> None:
+        raise OSError("synthetic cleanup failure")
+
+    with monkeypatch.context() as context:
+        context.setattr(service.blobs, "store", delete_then_store)
+        context.setattr(service.blobs, "delete", fail_cleanup)
+        envelope, _ = service.ingest(synthetic_png)
+
+    failed = service.database.deletion_receipt(
+        content_id=envelope.content_id,
+        owner_id=config.owner_id,
+    )
+    encrypted = next(item for item in failed.stores if item.store == "encrypted_blob")
+    assert failed.complete is False
+    assert failed.state is ProcessingState.DELETING
+    assert encrypted.state.value == "failed"
+    assert list(config.blob_root.glob("*.blob"))
+
+    retried = service.delete(envelope.content_id)
+    assert retried.complete is True
+    assert list(config.blob_root.glob("*.blob")) == []
+
+
 def test_concurrent_workers_execute_one_claim_once(
     config: MemoryConfig,
     clock: MutableClock,
@@ -118,6 +181,15 @@ def test_concurrent_workers_execute_one_claim_once(
     assert ocr.calls == 1
     processed = next(outcome for outcome in outcomes if outcome is not None)
     assert processed.envelope.state is ProcessingState.PROCESSED
+
+
+def test_invalid_heartbeat_interval_is_rejected(config: MemoryConfig) -> None:
+    with pytest.raises(ValueError, match="heartbeat interval"):
+        MemoryService(
+            config,
+            ocr_provider=FakeOCR(),
+            lease_heartbeat_interval_seconds=0,
+        )
 
 
 def test_stale_worker_cannot_ack_after_lease_recovery(
@@ -160,6 +232,58 @@ def test_stale_worker_cannot_ack_after_lease_recovery(
     assert current.lease_token == recovered.lease_token
 
 
+def test_heartbeat_prevents_reclaim_during_slow_provider_work(
+    tmp_path: Path,
+    clock: MutableClock,
+    synthetic_png: bytes,
+) -> None:
+    entered = Event()
+    release = Event()
+    renewed = Event()
+
+    class BlockingOCR:
+        name = "blocking-local-ocr"
+
+        def extract_text(self, _image_bytes: bytes) -> str:
+            entered.set()
+            assert release.wait(timeout=30)
+            return "synthetic evidence"
+
+    config = MemoryConfig(data_root=tmp_path / "private", lease_seconds=5)
+    service = MemoryService(
+        config,
+        clock=clock,
+        ocr_provider=BlockingOCR(),
+        lease_heartbeat_interval_seconds=0.01,
+    )
+    service.ingest(synthetic_png)
+    original_renew = service.database.renew_processing_lease
+
+    def observe_renewal(**kwargs: object) -> None:
+        original_renew(**kwargs)  # type: ignore[arg-type]
+        renewed.set()
+
+    service.database.renew_processing_lease = observe_renewal  # type: ignore[method-assign]
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(service.process_next)
+        assert entered.wait(timeout=10)
+        clock.advance(seconds=6)
+        renewed.clear()
+        assert renewed.wait(timeout=10)
+        competing = service.database.claim_next(
+            owner_id=config.owner_id,
+            now=clock(),
+            lease_seconds=config.lease_seconds,
+            max_retries=config.max_retries,
+        )
+        release.set()
+        processed = future.result(timeout=30)
+
+    assert competing is None
+    assert processed is not None
+    assert processed.envelope.state is ProcessingState.PROCESSED
+
+
 def test_denied_source_fails_before_any_durable_item_or_blob(
     tmp_path: Path,
     synthetic_png: bytes,
@@ -175,6 +299,41 @@ def test_denied_source_fails_before_any_durable_item_or_blob(
 
     assert service.database.state_counts(config.owner_id)["received"] == 0
     assert list(config.blob_root.glob("*.blob")) == []
+
+
+def test_locally_observed_denied_app_cannot_be_bypassed_by_client_label(
+    tmp_path: Path,
+    synthetic_png: bytes,
+) -> None:
+    class DetectedBank:
+        name = "synthetic-source-observer"
+
+        def detect(self, _image_bytes: bytes) -> str:
+            return "BANK"
+
+    config = MemoryConfig(data_root=tmp_path / "private", denied_sources=("bank",))
+    service = MemoryService(
+        config,
+        ocr_provider=FakeOCR(),
+        source_observation_provider=DetectedBank(),
+    )
+
+    with pytest.raises(ContentDenied):
+        service.ingest(synthetic_png, source="desktop-hotkey")
+
+    assert service.database.state_counts(config.owner_id)["received"] == 0
+    assert list(config.blob_root.glob("*.blob")) == []
+
+
+def test_source_rules_fail_closed_without_local_observation_provider(
+    tmp_path: Path,
+    synthetic_png: bytes,
+) -> None:
+    config = MemoryConfig(data_root=tmp_path / "private", denied_sources=("bank",))
+    service = MemoryService(config, ocr_provider=FakeOCR())
+
+    with pytest.raises(ContentDenied, match="source detector is required"):
+        service.ingest(synthetic_png, source="desktop-hotkey")
 
 
 def test_remote_provider_rejects_invalid_or_oversized_output() -> None:

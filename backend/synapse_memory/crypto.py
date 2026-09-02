@@ -146,14 +146,8 @@ def load_or_create_keyring(path: Path, *, auto_create: bool) -> Keyring:
     keyring = Keyring(active_key_id=key_id, keys={key_id: key})
     payload = _canonical_json(keyring.to_json())
     try:
-        with path.open("xb") as handle:
-            _set_private_permissions(path)
-            handle.write(payload)
-            handle.flush()
-            os.fsync(handle.fileno())
-        _fsync_directory(path.parent)
-        return keyring
-    except FileExistsError:
+        if _atomic_create(path, payload):
+            return keyring
         # Another local process won the exclusive create race.
         return load_keyring(path)
     except OSError as exc:
@@ -207,6 +201,36 @@ def _atomic_write(path: Path, data: bytes) -> None:
         raise
 
 
+def _atomic_create(path: Path, data: bytes) -> bool:
+    """Publish a fully fsynced new file without exposing a partial final path."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="wb", dir=path.parent, prefix=".synapse-", suffix=".tmp", delete=False
+        ) as handle:
+            temporary_path = Path(handle.name)
+            _set_private_permissions(temporary_path)
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        try:
+            # A hard link is an atomic create-if-absent publication on the same
+            # filesystem. The temporary name is removed after the directory entry
+            # is durable, leaving no partially written keyring at the final path.
+            os.link(temporary_path, path)
+        except FileExistsError:
+            return False
+        _set_private_permissions(path)
+        _fsync_directory(path.parent)
+        return True
+    finally:
+        if temporary_path is not None:
+            with suppress(OSError):
+                temporary_path.unlink(missing_ok=True)
+
+
 @dataclass(frozen=True, slots=True)
 class StoredBlob:
     blob_name: str
@@ -250,7 +274,13 @@ class EncryptedBlobStore:
         )
 
     def store(
-        self, *, owner_id: str, content_id: str, content_hash: str, plaintext: bytes
+        self,
+        *,
+        owner_id: str,
+        content_id: str,
+        content_hash: str,
+        key_id: str,
+        plaintext: bytes,
     ) -> StoredBlob:
         if self.content_hash(plaintext) != content_hash:
             raise StorageIntegrityError("The supplied content hash does not match the image bytes.")
@@ -259,13 +289,20 @@ class EncryptedBlobStore:
                 owner_id=owner_id,
                 content_id=content_id,
                 content_hash=content_hash,
+                key_id=key_id,
                 plaintext=plaintext,
             )
 
     def _store_locked(
-        self, *, owner_id: str, content_id: str, content_hash: str, plaintext: bytes
+        self,
+        *,
+        owner_id: str,
+        content_id: str,
+        content_hash: str,
+        key_id: str,
+        plaintext: bytes,
     ) -> StoredBlob:
-        key_id = self.keyring.active_key_id
+        key = self.keyring.key(key_id)
         blob_name = self.blob_name(owner_id, content_hash, key_id)
         path = self._path(blob_name)
         if path.exists():
@@ -285,7 +322,7 @@ class EncryptedBlobStore:
             content_hash=content_hash,
             key_id=key_id,
         )
-        ciphertext = AESGCM(self.keyring.active_key).encrypt(nonce, plaintext, aad)
+        ciphertext = AESGCM(key).encrypt(nonce, plaintext, aad)
         key_id_bytes = key_id.encode("ascii")
         encoded = BLOB_MAGIC + bytes([len(key_id_bytes)]) + key_id_bytes + nonce + ciphertext
         try:

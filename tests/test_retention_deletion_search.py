@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
+from threading import Event
 
 import pytest
 from conftest import FakeOCR, MutableClock
 from synapse_memory.config import MemoryConfig
-from synapse_memory.errors import OwnerMismatch
+from synapse_memory.errors import LeaseConflict, OwnerMismatch
 from synapse_memory.models import DeletionState, ProcessingState, RetentionClass
+from synapse_memory.providers import DeletionAdapter
 from synapse_memory.service import MemoryService
 
 
@@ -22,12 +25,27 @@ class RecordingDeletionAdapter:
             raise RuntimeError("synthetic adapter failure")
 
 
+class BlockingDeletionAdapter:
+    name = "vector"
+
+    def __init__(self) -> None:
+        self.entered = Event()
+        self.release = Event()
+        self.calls = 0
+
+    def delete(self, *, owner_id: str, content_id: str) -> None:
+        assert owner_id and content_id
+        self.calls += 1
+        self.entered.set()
+        assert self.release.wait(timeout=3)
+
+
 def _processed_service(
     config: MemoryConfig,
     clock: MutableClock,
     synthetic_png: bytes,
     *,
-    deletion_adapters: dict[str, RecordingDeletionAdapter] | None = None,
+    deletion_adapters: dict[str, DeletionAdapter] | None = None,
 ) -> tuple[MemoryService, str]:
     service = MemoryService(
         config,
@@ -107,6 +125,94 @@ def test_partial_deletion_stays_visible_and_retryable(
     vector_status = next(item for item in second.stores if item.store == "vector")
     assert vector_status.state is DeletionState.COMPLETE
     assert vector_status.attempts == 2
+
+
+def test_concurrent_deletion_calls_claim_each_external_store_once(
+    config: MemoryConfig,
+    clock: MutableClock,
+    synthetic_png: bytes,
+) -> None:
+    vector = BlockingDeletionAdapter()
+    service, content_id = _processed_service(
+        config,
+        clock,
+        synthetic_png,
+        deletion_adapters={"vector": vector},
+    )
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        first_future = executor.submit(service.delete, content_id)
+        assert vector.entered.wait(timeout=3)
+        overlapping = service.delete(content_id)
+        vector.release.set()
+        first = first_future.result(timeout=3)
+
+    assert overlapping.complete is False
+    assert first.complete is True
+    assert vector.calls == 1
+    final = service.database.deletion_receipt(
+        content_id=content_id,
+        owner_id=config.owner_id,
+    )
+    vector_status = next(item for item in final.stores if item.store == "vector")
+    assert vector_status.attempts == 1
+
+
+def test_crashed_deletion_claim_recovers_after_lease_expiry(
+    config: MemoryConfig,
+    clock: MutableClock,
+    synthetic_png: bytes,
+) -> None:
+    service, content_id = _processed_service(config, clock, synthetic_png)
+    service.database.begin_deletion(
+        content_id=content_id,
+        owner_id=config.owner_id,
+        stores=("vector",),
+        now=clock(),
+    )
+    stale = service.database.claim_store_deletion(
+        content_id=content_id,
+        owner_id=config.owner_id,
+        store="vector",
+        now=clock(),
+        lease_seconds=10,
+    )
+    assert stale is not None
+    clock.advance(seconds=11)
+
+    recovered = service.database.claim_store_deletion(
+        content_id=content_id,
+        owner_id=config.owner_id,
+        store="vector",
+        now=clock(),
+        lease_seconds=10,
+    )
+    assert recovered is not None and recovered != stale
+    with pytest.raises(LeaseConflict):
+        service.database.record_store_deletion(
+            content_id=content_id,
+            store="vector",
+            lease_token=stale,
+            state=DeletionState.COMPLETE,
+            error_code=None,
+            now=clock(),
+        )
+    service.database.record_store_deletion(
+        content_id=content_id,
+        store="vector",
+        lease_token=recovered,
+        state=DeletionState.COMPLETE,
+        error_code=None,
+        now=clock(),
+    )
+
+    receipt = service.database.deletion_receipt(
+        content_id=content_id,
+        owner_id=config.owner_id,
+    )
+    vector = next(item for item in receipt.stores if item.store == "vector")
+    assert vector.state is DeletionState.COMPLETE
+    assert vector.attempts == 2
 
 
 def test_ttl_sweep_removes_expired_item_from_every_configured_store(

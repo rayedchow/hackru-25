@@ -130,22 +130,24 @@ def ask(query: str, project_to_3d: bool = True):
     # 3D projection (fit on the combined set so both lie in the same space)
     if project_to_3d:
         all_vecs = []
+        # (index into comms/cards, row index in all_vecs) — items without an
+        # embedding are skipped, so the two indices are not interchangeable.
         idx_comm, idx_card = [], []
         for i, c in enumerate(comms):
             if c.get("embedding") is not None:
-                idx_comm.append(len(all_vecs))
+                idx_comm.append((i, len(all_vecs)))
                 all_vecs.append(c["embedding"])
         for i, c in enumerate(cards):
             if c.get("embedding") is not None:
-                idx_card.append(len(all_vecs))
+                idx_card.append((i, len(all_vecs)))
                 all_vecs.append(c["embedding"])
 
         if all_vecs:
             Z = pca_3d(all_vecs)  # or umap_3d(all_vecs)
-            for k, i_global in enumerate(idx_comm):
-                comms[k]["coords3d"] = Z[i_global].tolist()
-            for k, i_global in enumerate(idx_card):
-                cards[k]["coords3d"] = Z[i_global].tolist()
+            for i_item, i_global in idx_comm:
+                comms[i_item]["coords3d"] = Z[i_global].tolist()
+            for i_item, i_global in idx_card:
+                cards[i_item]["coords3d"] = Z[i_global].tolist()
 
     # Create clean copies for prompt (no embeddings or coords3d)
     comms_for_prompt = []

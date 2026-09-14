@@ -120,6 +120,14 @@ const express = require("express");
 const expressApp = express();
 
 expressApp.use(express.json());
+expressApp.use((req, res, next) => {
+  const origin = req.get("origin");
+  if (origin && origin !== "http://127.0.0.1:3000" && origin !== "http://localhost:3000") {
+    res.status(403).json({ success: false, error: "untrusted_origin" });
+    return;
+  }
+  next();
+});
 
 expressApp.post("/electron/show", (req, res) => {
   console.log("Received request to show window");
@@ -137,6 +145,6 @@ expressApp.post("/electron/show", (req, res) => {
   res.json({ success: true });
 });
 
-expressApp.listen(3001, () => {
-  console.log("Electron control server listening on port 3001");
+expressApp.listen(3001, "127.0.0.1", () => {
+  console.log("Electron control server listening on 127.0.0.1:3001");
 });

@@ -8,8 +8,6 @@ import {
   Search,
   FileText,
   Save,
-  Copy,
-  Bookmark,
   Sparkles,
   X,
 } from "lucide-react";
@@ -34,13 +32,13 @@ export function ChatInterface() {
   const [messages, setMessages] = useState<Message[]>([
     {
       id: 1,
-      text: "Hello! I'm ready to help you analyze screenshots and answer questions.",
+      text: "Synapse searches processed local memories and cites the matching source IDs.",
       sender: "bot",
       timestamp: "2:30 PM",
     },
     {
       id: 2,
-      text: "Press Command + J to capture a screenshot, then ask me about it!",
+      text: "Press Command + J to encrypt a capture locally, then process the queue before searching.",
       sender: "bot",
       timestamp: "2:31 PM",
     },
@@ -51,7 +49,6 @@ export function ChatInterface() {
   const [showViz, setShowViz] = useState(false);
   const [vizData, setVizData] = useState<ApiResponse | null>(null);
   const [currentQuestion, setCurrentQuestion] = useState("");
-  const [screenshotPreview, setScreenshotPreview] = useState<string | null>(null);
 
   const handleSend = async () => {
     if (input.trim()) {
@@ -61,51 +58,17 @@ export function ChatInterface() {
       setIsTyping(true);
       
       try {
-        // Check if there's a screenshot available
-        const screenshotCheck = await fetch("/api/screenshot?t=" + Date.now());
-        const screenshotData = await screenshotCheck.json();
-        
-        let response;
-        
-        if (screenshotData.url) {
-          // Fetch screenshot as base64
-          const base64Response = await fetch("/api/screenshot?base64=true");
-          const base64Data = await base64Response.json();
-          
-          if (base64Data.base64) {
-            // Store screenshot preview temporarily
-            setScreenshotPreview(`data:image/png;base64,${base64Data.base64}`);
-            
-            // Call /ask_screenshot with base64 image
-            response = await fetch("http://localhost:8000/ask_screenshot", {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-              },
-              body: JSON.stringify({
-                screenshot: base64Data.base64,
-              }),
-            });
-            
-            // Delete the latest.png file
-            await fetch("/api/screenshot", {
-              method: "DELETE",
-            });
-          } else {
-            throw new Error("Failed to get screenshot base64");
-          }
-        } else {
-          // No screenshot, use regular question endpoint
-          response = await fetch("http://localhost:8000/ask_question", {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              question: userQuestion,
-            }),
-          });
-        }
+        // Captures are encrypted and queued at ingestion time. Queries receive only
+        // source-grounded local evidence; the browser never reads raw screenshot bytes.
+        const response = await fetch("http://127.0.0.1:8000/ask_question", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            question: userQuestion,
+          }),
+        });
 
         const data = await response.json();
         
@@ -128,7 +91,6 @@ export function ChatInterface() {
     setShowViz(false);
     setVizData(null);
     setCurrentQuestion("");
-    setScreenshotPreview(null);
   };
 
   const quickActions = [
@@ -169,6 +131,7 @@ export function ChatInterface() {
                 whileHover={{ scale: 1.1, rotate: 90 }}
                 whileTap={{ scale: 0.9 }}
                 onClick={handleCloseViz}
+                aria-label="Close search results"
                 className="p-2 rounded-lg bg-background/60 hover:bg-background/80 border border-border/40 text-foreground/70 hover:text-foreground transition-colors"
               >
                 <X className="h-4 w-4" />
@@ -269,6 +232,7 @@ export function ChatInterface() {
                   onChange={(e) => setInput(e.target.value)}
                   onKeyDown={(e) => e.key === "Enter" && handleSend()}
                   placeholder="Ask about your screenshots or type a message..."
+                  aria-label="Search processed local memories"
                   className="flex-1 bg-background/60 backdrop-blur-sm border-border/50 font-mono text-sm focus:ring-2 focus:ring-primary/50"
                   disabled={isTyping}
                 />
@@ -277,6 +241,7 @@ export function ChatInterface() {
                     onClick={handleSend}
                     size="icon"
                     disabled={isTyping}
+                    aria-label="Search local memories"
                     className="shrink-0 shadow-lg bg-gradient-to-r from-primary to-primary/80 hover:from-primary/90 hover:to-primary/70"
                     style={{
                       boxShadow: "0 0 20px rgba(59, 130, 246, 0.4)",

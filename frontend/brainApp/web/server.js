@@ -4,8 +4,14 @@ const next = require("next");
 const { WebSocketServer } = require("ws");
 
 const dev = process.env.NODE_ENV !== "production";
-const hostname = "localhost";
+const hostname = process.env.SYNAPSE_WEB_BIND_HOST || "127.0.0.1";
 const port = 3000;
+const allowedOrigins = new Set(
+  (process.env.SYNAPSE_WEB_ALLOWED_ORIGINS || "http://127.0.0.1:3000,http://localhost:3000")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean),
+);
 
 // Create Next.js app
 const app = next({ dev, hostname, port });
@@ -63,8 +69,9 @@ app.prepare().then(() => {
   // Handle WebSocket upgrade
   server.on("upgrade", (request, socket, head) => {
     const { pathname } = parse(request.url);
+    const origin = request.headers.origin;
 
-    if (pathname === "/ws/screenshot") {
+    if (pathname === "/ws/screenshot" && origin && allowedOrigins.has(origin)) {
       wss.handleUpgrade(request, socket, head, (ws) => {
         wss.emit("connection", ws, request);
       });
@@ -73,7 +80,7 @@ app.prepare().then(() => {
     }
   });
 
-  server.listen(port, (err) => {
+  server.listen(port, hostname, (err) => {
     if (err) throw err;
     console.log(`> Ready on http://${hostname}:${port}`);
     console.log(`> WebSocket server ready on ws://${hostname}:${port}/ws/screenshot`);

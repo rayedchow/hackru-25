@@ -23,13 +23,22 @@ export default function LandingPage() {
                 Synapse
               </h1>
               <p className="text-lg text-muted-foreground font-mono max-w-2xl mx-auto">
-                Personal intelligence system with instant screenshot capture and
-                AI-powered analysis
+                Encrypted local screenshot memory with source-grounded retrieval.
+                Remote processing is off by default.
               </p>
+              <a
+                href="http://127.0.0.1:8000/privacy"
+                className="mt-4 inline-flex rounded-md border border-primary/50 px-4 py-2 font-mono text-sm text-foreground outline-none hover:bg-primary/10 focus-visible:ring-2 focus-visible:ring-primary"
+              >
+                Review privacy status
+              </a>
             </div>
 
             {/* Knowledge Graph */}
             <div className="w-full flex-shrink">
+              <p className="mb-2 text-xs font-mono text-muted-foreground">
+                Prototype visualization — not a view of stored private memories.
+              </p>
               <KnowledgeGraph nodes={graphData.nodes} edges={graphData.edges} />
             </div>
           </div>

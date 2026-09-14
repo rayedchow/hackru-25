@@ -2,21 +2,24 @@
 WebSocket management for real-time dashboard updates.
 """
 
-from fastapi import WebSocket, WebSocketDisconnect
 import asyncio
+
+from fastapi import WebSocket, WebSocketDisconnect
 
 # Active WebSocket connections
 connections: list[WebSocket] = []
+BROADCAST_SEND_TIMEOUT_SECONDS = 0.5
 
 
-async def websocket_endpoint(websocket: WebSocket):
+async def websocket_endpoint(websocket: WebSocket) -> None:
     """Handle WebSocket connection lifecycle."""
     await websocket.accept()
     connections.append(websocket)
     try:
-        # Keep connection alive
         while True:
-            await asyncio.sleep(60)
+            # Receiving lets Starlette surface disconnects immediately. Client
+            # messages are intentionally ignored; this channel is metadata-only.
+            await websocket.receive_text()
     except WebSocketDisconnect:
         pass
     finally:
@@ -24,11 +27,17 @@ async def websocket_endpoint(websocket: WebSocket):
             connections.remove(websocket)
 
 
-async def broadcast(message: dict):
+async def broadcast(message: dict[str, object]) -> None:
     """Send message to all connected WebSocket clients."""
-    for ws in connections[:]:
+
+    async def send(ws: WebSocket) -> None:
         try:
-            await ws.send_json(message)
+            await asyncio.wait_for(
+                ws.send_json(message),
+                timeout=BROADCAST_SEND_TIMEOUT_SECONDS,
+            )
         except Exception:
             if ws in connections:
                 connections.remove(ws)
+
+    await asyncio.gather(*(send(ws) for ws in connections[:]))
